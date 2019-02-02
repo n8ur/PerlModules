@@ -1,0 +1,111 @@
+N8UR-Gpib
+Routines to handle gpib communications:
+
+# check SRQ on $board
+$boolean = checkSRQ($board)
+
+# if SRQ asserted, read one line and return
+$string = serviceSRQ($board)
+
+# if SRQ asserted, read $num_reading lines into array and return
+@string = serviceSRQmulti($board,$num_readings)
+
+# write $command to $dev
+ibwrite($device,$command)
+
+N8UR-NumTools
+A collection of routines I use for number munging
+
+    use N8UR::NumTools;
+
+    # round $input to $num_places
+    $num = round($num_places,$input)
+
+    # true if $input is numeric
+    $boolean = is_number($input);
+
+    # convert $input from decimal into bitmask; output as string
+    $string = dec2bin($input);
+
+    # same thing, but trim leading zeroes
+    $string = dec2bin_no_leading_zeroes($input);
+
+    # convert bitmap $input to decimal number
+    $num = bin2dec($input)
+
+    # convert bitmap $input to hexadecimal number
+    $num = bin2hex($input)
+
+N8UR-StringTools
+
+    # remove whitespace, nulls, crlf, and newlines
+    $string = trim($input)
+
+    # collapse multiple spaces to just one
+    $string = collapse($input)
+
+    # remove all spaces from string
+    $string = squash($input)
+
+    # return $input as lower case
+    $string = lower_case($input)
+
+    # return $input as upper case
+    $string = upper_case($input)
+
+    ($prefix,$value,$suffix) = parse_value($string)
+
+
+N8UR-TimeNutsTools
+
+	use N8UR::TimeNutsTools;
+    
+    # return fractional difference (e.g., -6.23e-12) of $actual
+    # vs. $reference frequencies.  $scale is "MHz", "kHz",
+    # or "Hz" (not case sensitive, but must be quoted) and
+    # defines the unit of the integer portion the inputs.
+    # (Both $reference and $actual must use the same scale.)
+
+    $float = make_frac_freq($reference,$actual,$scale);
+    
+    # same as above, but convert to nicely formatted string
+
+    $string = make_frac_freq_string($reference,$actual,"MHz");
+    
+    # output formatted string of float $freq.
+    # $places is number of digits to the right of the
+    # decimal point.  $scale is "MHz", "kHz", or "Hz"
+	# (not case sensitive, but must be quoted) and
+    # defines the unit of the integer portion the input.
+
+	$string = make_pretty_freq_string($freq, $places, "MHz");
+
+    # mainly used internally for pretty printing.  returns 
+    # value to use in sprintf for the number of characters to 
+    # the left of the decimal point, including leading spaces.
+
+    $int = scale_freq($input);
+
+    # prints formatted log data.  $tagtype is "mjd" or "iso",
+    # for the timestamp format.  $tagprecision is the number of
+    # decimal places for MJD.  $precision is number of decimal
+    # for formatted data.  $value1 through $value4 are data values
+    # in numeric form.i
+    # [ TODO: allow arbitrary number of data fields. ]
+
+    logline($tagtype, $tagprecision, $precision, \
+        $value1, $value2, $value3, $value4)
+
+    # as above, but prints one or two text fields with timestamps
+    # [ TODO: allow arbitrary number of data fields. ]
+
+    logline_text($tagtype, $tagprecision, $value1, $value2);
+
+
+PostScript-PSjoin
+This module is a wrapper around the standalone Perl script "psjoin.pl"
+by Tom Sato.  All I did was the minimal set of changes to allow Tom's
+script to work as a Perl subroutine.
+
+    # concatenate multiple PostScript files into one
+	$outfile = psjoin([option],file1,file2,[file3],[etc...]

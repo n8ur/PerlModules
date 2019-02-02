@@ -1,0 +1,11 @@
+package MyModule;
+
+use 5.006;
+use strict;
+use warnings;
+use Exporter qw( import );
+
+our @EXPORT      = qw();
+our @EXPORT_OK   = qw();
+our %EXPORT_TAGS = qw(); 
+our $VERSION = 1.00;

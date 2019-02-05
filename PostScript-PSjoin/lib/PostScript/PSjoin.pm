@@ -38,8 +38,8 @@ or combination of the input PostScript files.
     use PostScript::PSjoin;
     psjoin("-p","psfile1.ps","psfile2.ps","psfile3.ps");
 
-join takes the following options as the first parameter
-passed to the routine:
+psjoin() takes the following options as the first parameter
+passed to the function:
 
 -a  Align first page of each documents to odd page, by inserting 
     an extra blank page after odd-paged documents - may be useful

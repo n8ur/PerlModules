@@ -4,6 +4,37 @@ This module is a wrapper around the standalone Perl script "psjoin.pl"
 by Tom Sato.  All I did was the minimal set of changes to allow Tom's
 script to work as a Perl subroutine.
 
+PostScript::PSjoin concatenates several PostScript files and
+generates a single PostScript document. The concatenated
+PostScript document will be written to the standard output.
+
+The input PostScript files must comply with the DSC (Document Structuring
+Convention). psjoin can fail to work depending on the input PostScript file
+or combination of the input PostScript files.
+
+    use PostScript::PSjoin;
+    psjoin("-p","psfile1.ps","psfile2.ps","psfile3.ps");
+
+psjoin() takes the following options as the first parameter
+passed to the function:
+
+-a  Align first page of each documents to odd page, by inserting
+    an extra blank page after odd-paged documents - may be useful
+    when concatenating two-sided documents.
+
+-s  Try to close unclosed save operators in the input files. This
+    option may be useful when input PostScript files have save 
+    operators which don't have corresponding restore operators, and 
+    the joined PostScript file causes ``limitcheck'' PostScript error 
+    due to too deeply nested save operators.
+
+-p  Force insert corresponding PostScript prolog/trailer codes into
+    all pages. Normally, to reduce the size of the output file, psjoin 
+    tries not to insert largest prolog/trailer codes repeatedly.
+
+-h  Display short description about the program and exit.
+
+
 INSTALLATION
 
 To install this module, run the following commands:

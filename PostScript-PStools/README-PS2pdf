@@ -1,35 +1,16 @@
 PostScript-PS2png
 
-ps2png takes a PostScript input file and outputs a PNG file that may
-be rotated and scaled from the original.
+ps2pdf is a dead simple stupid function to convert a PostScript
+file to PDF using ghostscript.
 
 There's already a nice-looking module on CPAN called PostScript::Convert
-(http://metacpan.org/pod/PostScript::Convert).  However, it lacks the
-scaling and rotation capabilities I needed for my PNG conversion.
-
-This function is based on ps2png.pl by Norbert Haider, University of 
-Vienna, copyright 2005, converted to a module with a few tweaks.
-
-ps2png reads a Postscript file and generates a 2D graphical images
-in PNG format by piping the PS file through Ghostscript.  Ghostscript
-must be installed and the "gs" command must be in your search path.
+(http://metacpan.org/pod/PostScript::Convert) that could do this job
+with more flexibility.  I created this simply to avoid another module
+installation.
 
 Usage:
-    use PostScript::PS2pngi qw( ps2png );
-    ps2png($rotation, $pixels_wide, $aspect, $inputfile, [$verbose])   
-
-$rotation: if set to "r" or "R" output image is rotated 90 degrees
-
-$pixels_wide: width in pixels of the output png file
-
-$aspect: change the aspect ratio by multiplying the y dimension by this
-value.  Enter 1 for no change.
-
-$input file is the name of the PostScript file.  The output file will
-have the same name with the extension changed from ".ps" to ".png".
-
-$verbose, if true, causes the function to print out status messages.  If
-false (or omitted) ps2png works silently.
+    use PostScript::PS2tools::PStopdf qw( ps2pdf );
+    ps2png($infile) 
 
 
 INSTALLATION

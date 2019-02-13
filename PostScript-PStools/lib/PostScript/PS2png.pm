@@ -22,8 +22,15 @@ Version 1.00
 
 =head1 SYNOPSIS
 
-This is ps2png.pl by Norbert Haider, University of Vienna,
-copyright 2005, converted to a module with a few tweaks.
+ps2png takes a PostScript input file and outputs a PNG file that may
+be rotated and scaled from the original.
+
+There's already a nice-looking module on CPAN called PostScript::Convert
+(http://metacpan.org/pod/PostScript::Convert).  However, it lacks the
+scaling and rotation capabilities I needed for my PNG conversion.
+
+This function is based on ps2png.pl by Norbert Haider, University of 
+Vienna, copyright 2005, converted to a module with a few tweaks.
 
 ps2png reads a Postscript file and generates a 2D graphical images 
 in PNG format by piping the PS file through Ghostscript.  Ghostscript 

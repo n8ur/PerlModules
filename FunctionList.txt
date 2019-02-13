@@ -102,10 +102,15 @@ N8UR-TimeNutsTools
     logline_text($tagtype, $tagprecision, $value1, $value2);
 
 
-PostScript-PSjoin
-This module is a wrapper around the standalone Perl script "psjoin.pl"
-by Tom Sato.  All I did was the minimal set of changes to allow Tom's
-script to work as a Perl subroutine.
+PostScript-PStools
+These are some tools for manipulating and converting PostScript files:
 
     # concatenate multiple PostScript files into one
 	$outfile = psjoin([option],file1,file2,[file3],[etc...]
+
+	# convert PostScript to PDF
+	ps2pdf($infile);  ## output is infile.pdf
+
+	#convert PostScript to PNG with scaling and rotation
+	ps2png($rotation,$pixels_wide,$aspect_ratio,$infile,[$verbose]
+

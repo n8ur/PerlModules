@@ -1,0 +1,7116 @@
+%!PS-Adobe-3.0
+%%EndComments
+
+% Copyright (C) 2004-2005 - Timing Solutions Corporation.
+% All Rights Reserved.
+% $TSC: devel/data/ps/ts/printwrapper.ps,v 1.15 2006/08/02 18:42:03 pks Exp $
+
+%%BeginProlog
+
+save
+
+% used for debugging ...
+/DO_DEBUG false def
+DO_DEBUG { (./blah.ps) run (./debug.ps) run } if
+
+% converts a point value to inches (very basic, stored in userdict)
+/inch { 72 mul } bind def
+
+%------------------------------------------------------------------------------
+% utility functions applicable in all contexts
+
+/Util
+<<
+    % eliminates the extraneous height offset, leaving only width on stack
+    /SW { stringwidth pop } bind
+
+    % splits the string parameter at the new line chracters and returns the
+    % individual lines in an array
+    /SplitLines
+    {
+        dup length 0 eq { pop [] }     % retrun empty array for empty string
+        {
+            /n 0 def
+            { /n n 1 add def (\n) search { 3 1 roll pop } { exit } ifelse } loop
+            n array astore
+        }
+        ifelse
+    }
+    bind
+
+    % returns the greater of the two top most operand stack items
+    /MAX { 2 copy exch gt { exch } if pop } bind
+
+    % negates the specified number of operands and follows them up with the
+    % original values:  10 20 30 3 NegCopy -> -10 -20 -30 10 20 30
+    /NegCopy { array astore dup { neg exch } forall aload pop } bind
+>>
+def
+
+%-----------------------------------------------------------------------------
+% this dictionary deals with tsc specific font generation and transformation
+% in an effort to produce fonts that closely match the dimensions the user
+% sees on the screen in the plot area
+
+/Font
+<<
+    % font sizes --------------------------------------------------------------
+
+    /FH_Title   0.40 inch     % renders plot and table titles
+    /FH_Medium  0.18 inch     % renders header/footer fields
+    /FH_Small   0.12 inch     % time stamps / product code / extra windows
+
+    % the user interface specifies string positions with the y coordinate
+    % aligned at the top of the glyph.  this constant is added to the font
+    % transformation matrix to achieve the lineup with the y coordinate in the
+    % post script font
+    /FH_Translate 1.10
+
+    % generates a font from the tsc font included by the user interface
+    % process and names the resulting dictionary according to the first
+    % parameter.  note the following about the y coordinate transformation
+    % matrix values
+    %
+    % - they are inverted because both portrait and landscape orientations
+    %   invert the y axis (text is rendered upside down without inversion)
+    % - the are offset by FH_Translate factor (see its documentation)
+    %
+    % param1: fontname (postscript name object)
+    % param2: size (in inches)
+    %
+    /MakeTscFont
+    {
+        /fhpts exch def
+
+        % generate the font (note that matrix transformation assumes inverted
+        %          y axis scale)
+        /Tsc-Avts-300 findfont
+        [ fhpts 0 0 fhpts neg 0 fhpts FH_Translate mul ]
+        makefont def
+    }
+    bind
+
+    % computes the height of the current font by applying its transformation
+    % matrix entry for the y axis to height entry of the font's bounding box
+    /FontHeight
+    {
+        currentfont /FontBBox get 3 get     % get font's bounding box height
+        currentfont /FontMatrix get 3 get   % get font's y scale ctm entry
+        mul abs                             % compute unit height
+    }
+    bind
+
+    % computes the width of the "0" glyph and adds a percentage for slop
+    /FontWidth { (0) SW 1.06 mul } bind
+>>
+def
+
+%-----------------------------------------------------------------------------
+% basic drawing routines
+
+/Drawing
+<<
+    % strings ----------------------------------------------------------------
+
+    % these output strings left, right and center aligned at the specified
+    % coordinates.
+    %
+    % 35 200 (this is right aligned at 35 200) RS   for example
+
+    /LS { 3 1 roll moveto show } bind
+    /RS { dup SW 4 -1 roll exch sub 3 -1 roll moveto show } bind
+    /CS { dup SW 2 div 4 -1 roll exch sub 3 -1 roll moveto show } bind
+
+    % lines ------------------------------------------------------------------
+
+    /LT_Light  { 0.5  setgray } bind
+    /LT_Medium { 0.25 setgray } bind
+    /LT_Dark   { 0 setgray } bind
+    /LT_Erase  { 1 setgray } bind
+    
+    /LT_Solid    { []  0 setdash } bind
+    /LT_Dash     { [1] 0 setdash } bind
+    /LT_LongDash { [2] 0 setdash } bind
+
+    /LT_Hair   { 0 setlinewidth } bind
+    /LT_Data   { 0.5 setlinewidth } bind
+    /LT_Thick  { 0.9 setlinewidth } bind
+
+    /LINE_MinorGrid { LT_Light   LT_Dash      LT_Hair  } bind
+    /LINE_MajorGrid { LT_Dark    LT_Solid     LT_Hair  } bind
+    /LINE_Data      { LT_Dark    LT_Solid     LT_Data  } bind
+    /LINE_Testmask  { LT_Dark    LT_LongDash  LT_Thick } bind
+    /LINE_Snapshot  { LT_Medium  LT_Dash      LT_Data  } bind
+
+    /LINE_Spur      { LINE_Data } bind
+    /LINE_Erase     { LT_Data LT_Erase } bind
+
+    /FILL_NoiseFloor { 0.85 setgray } bind
+    
+    /DL { moveto lineto stroke } bind
+    /DP { newpath 1.2 0 359.99 arc closepath fill } bind
+
+    % markers ----------------------------------------------------------------
+
+    % draws a marker's cross hair
+    /DMC { -4 0 4 0 DL 0 -4 0 4 DL } bind
+    
+    % draws a marker's diamond outline
+    /DMD
+    {
+        newpath
+        -7 0 moveto 7 -7 rlineto 7 7 rlineto -7 7 rlineto
+        closepath stroke
+    }
+    bind
+
+    % draws an entire marker by outputting a background and then superimposing
+    % the marker
+    /DM
+    {
+        2 NegCopy translate
+        LINE_Erase currentlinewidth 3 mul setlinewidth DMD DMC
+        LINE_Data DMD DMC
+        translate
+    }
+    bind
+>>
+def
+
+%-----------------------------------------------------------------------------
+% this dictionary defines supported media types, page orientation and the
+% print job header drawing routine.  the job header is expected to be a
+% dictionary named /Header in the /PrintJob dictionary.  since the routines
+% determine where and how job header information is displayed, they set
+% variables which delimit where other components such as plots and tables
+% can be printed
+
+/Media
+<<
+    % A4 is 210x297  millimeters (1 inch = 25.40 millimeters)
+
+    /Letter << /PhysW  8.5 inch  /PhysH 11.0 inch >>
+    /A4 << /PhysW 210 25.40 div inch /PhysH 297 25.40 div inch >>
+    /Margin 0.50 inch
+
+    % orientation -------------------------------------------------------------
+
+    /PageDims << >>     % populated by the Portrait and landscape functions
+
+    % the orientation functions are expected to be called with the dictionary
+    % that defines physical page dimensions (Letter/A4) on the stack. As in
+    %
+    % Letter Portrait     or   A4 Landscape    for example
+    
+    /Portrait
+    {
+        begin PageDims begin
+        /Width PhysW def /Height PhysH def   % logical dims are physical dims
+        0 Height translate                   % put origin at top left of page
+        1 -1 scale                           % invert the y axis
+        end end
+
+        DrawHeader             % and draw the header
+    }
+    bind
+    
+    /Landscape
+    {
+        % exchange the logical and physical dimensions
+        begin PageDims begin /Width PhysH def /Height PhysW def end end
+
+        90 rotate     % rotate for orientation and
+        1 -1 scale    % inver the y axis
+        DrawHeader    % and draw the header
+    }
+    bind
+
+    % these are populated to by /DrawHeader to
+    /FooterDims << >>   % suggest locations for inputs, subtitle and page title
+    /DataDims << >>     % let plot or table know how much as is available
+    
+    /DrawHeader
+    {
+        % output timestamp and collection duration in top left corner and
+        % product code in the top right corner
+        Header begin
+        FONT_Small setfont
+        Margin Margin 2 copy Timestamp LS
+        FontHeight add Duration LS
+        PageDims /Width get Margin sub Margin Product RS
+        end
+
+        % compute the area a plot or table may occupy and suggested locations
+        % for the footer locations - a given page job may change these (plot
+        % objects do)
+        FooterDims begin
+        /Left Margin def
+        /Right PageDims /Width get Margin sub def
+        /Line1 PageDims /Height get Margin sub FH_Medium 2 mul sub def
+        /Line2 Line1 FH_Medium add def
+        end
+
+        % compute the area available for plot/table output
+        DataDims begin
+        /Left Margin def
+        /Width PageDims /Width get 2 Margin mul sub def
+        /Top Margin FH_Title 1.2 mul add def
+        /Height FooterDims /Line1 get Top sub def
+        end
+
+        gsave   % save graphics state for restoring by /DrawFooter
+    }
+    bind
+
+    % draws the inputs status and sub title at the locations computed by
+    % /DrawHeader (which may hve been modified by plot) and outputs the
+    % the /Title value in the /Header dictionary - plot and table output code
+    % is expected to call /SetPageTitle before drawing the footer
+    /DrawFooter
+    {
+        grestore   % restore graphics state saved by /DrawHeader 
+        
+        FONT_Medium setfont
+        Header begin FooterDims begin
+
+        Left Line1 Input LS            % output input status left and right
+        Right Line1 Reference RS       % aligned at the corresponding locations
+
+        Left Right add 2 div dup       % compute center coordinate
+        Line2 Subtitle CS              % and use it output the subtitle
+        FONT_Title setfont
+        Margin Title CS                % and page title
+
+        end end
+    }
+    bind
+
+    % sets the /Title entry in the /Header dictionary
+    /SetPageTitle { Header begin /Title exch def end } bind
+>>
+def
+
+/Tables
+<<
+    /CL { pop pop } bind               % the alignment methods expect
+    /CC { sub 2 div add } bind         % column's x coordinate
+    /CR { sub add } bind               % column's width and string's width
+
+    % adds a dictionary entry for the current font dimensions
+    /MeasureFont { /FH FontHeight def /FW FontWidth def } bind
+
+    % expect the column dictionary to be open and stores each of the title's
+    % rows in the /TR array in the dictionary, the title's width and height
+    % are stored in /TW and /TH respectively
+    /MeasureTitle
+    {
+        /TR T SplitLines def                     % split title into lines
+        /TH TR length FH mul def                 % compute title height
+        /TW 0 TR { SW MAX } forall FW add def    % compute widest lines
+    }
+    bind
+
+    % computes the width of the column, adding an extra characters worth of
+    % space and measures the column's title
+    /MeasureColumn
+    {
+        begin
+        /W 0 Rows { SW MAX } forall FW add def
+        /H Rows length FH mul def
+        MeasureTitle /W W TW MAX def
+        end
+    }
+    bind
+
+    % expects the table dictionary to be open
+    /MeasureTable
+    {
+        MeasureFont                                 % track font dimensions
+
+        % measure each of the columns, then compute table's dimensions
+        Columns { MeasureColumn } forall
+        /W 0 Columns { /W get add } forall def
+        /H 0 Columns { /H get MAX } forall def      
+        /TH 0 Columns { /TH get MAX } forall def
+        /H H TH add def
+    }
+    bind
+
+    % adjust x coordinate by half a character's width (added by MeasureColumn)
+    % eliminates character width drom column width, aligns the column and output
+    % outputs the row
+    /DrawRow
+    {
+        dup SW FW 2 div W FW sub 3 -1 roll A
+        2 index moveto show FH add
+    }
+    bind
+    
+    /DrawColumn
+    {
+        % output column title and data rows, then translate for next column
+        begin
+        TR length FH mul neg TR { DrawRow } forall pop
+        0 Rows { DrawRow } forall pop
+        W 0 translate
+        end
+    }
+    bind
+    
+    /DrawTable
+    {
+        begin
+
+        gsave
+        
+	W 2 div H FH 2 div add           % compute bottom center coordinate
+	BC SplitLines                    
+	{                                % for each line in the caption
+	    3 1 roll 2 copy              % copy coordinate
+	    5 -1 roll CS                 % and output string center aligned
+	    FH add                       % add one font height for next line
+	} forall                         % divide at new line characters
+	pop pop                          % finally remove original coords
+
+        0 TH translate                   % offset coordinates by title height
+
+        LINE_Data                        % underline column titles
+        0 0 moveto W 0 rlineto stroke
+
+        10 neg 0 TL RS                   % output top left caption
+        10 W add 0 TR LS                 % output top right caption
+
+        Columns { DrawColumn } forall    % draw all of the columns
+
+        grestore
+        
+        % now output vertical divider lines for each of the columns
+        LINE_Data 0
+        0 1 Columns length 2 sub
+        {
+            Columns exch get /W get
+            add dup 0 moveto 0 H rlineto stroke
+        }
+        for pop
+
+        end
+    }
+    bind
+>>
+def
+
+/Windows
+<<
+    /MeasureWindow
+    {
+        % measure internal table and accommodate the window frame
+        begin MeasureTable  /W W FW 2 mul add def /H H FW 2 mul add def end
+    }
+    bind
+
+    % these functions modify the position an extra window given it's width
+    % and height - they are specified by means of /HorzAnchor and /VertAnchor
+    % values in the extra window dictionary to be drawn and applied by
+    % the apply anchor function in DrawExtraWindow
+    /WAL { } bind
+    /WAR { exch W sub exch } bind
+    /WAT { } bind
+    /WAB { H sub } bind
+
+    % determines if the specified anchor function was set for the window to
+    % drawn and runs it if so
+    /Anchor
+    {
+        dup where
+        {
+            currentdict eq { currentdict exch get cvx exec } if
+        }
+        { pop } ifelse
+    }
+    bind
+
+    /DrawWindow
+    {
+        begin
+
+        % apply optional anchors to x and y coordinates then translate
+        % coordinate system for output
+        X Y /AnchorH Anchor /AnchorV Anchor
+        2 NegCopy translate
+
+        % erase window background then outline it
+        /hfw FW 2 div def
+        LINE_Erase 0 0 W H rectfill
+        LINE_Data hfw hfw W FW sub H FW sub rectstroke
+
+        % draw it's content columns and output the title
+        gsave FW FW translate Columns { DrawColumn } forall grestore
+
+        Title length 0 gt
+        {
+            FW FH 3 div neg 2 NegCopy translate
+            LINE_Erase 0 2 Title SW FW add FH 2 sub rectfill
+            LINE_Data FW 2 div 0 moveto Title show
+            translate
+        }
+        if
+        
+        % undo translation applied after window was anchored
+        translate
+        end
+    }
+    bind
+>>
+def
+
+/Charts
+<<
+    /ScaleForPlot
+    {
+        DataDims begin
+
+        /SrcHeight exch def   /SrcWidth exch def  % record screen dimensions
+        /GridRight exch def   /GridLeft exch def  % record grid dimensions
+        
+        /Ratio Height SrcHeight div def      % compute good screen/media height
+        /PlotHeight Height def               % ratio and scale width to it
+        /PlotWidth SrcWidth Ratio mul def
+
+        % compute plot's top left corner in post script coordinate system
+        /PlotLeft Left Width PlotWidth sub 2 div add def
+        /PlotTop Top def
+
+        % update footer outsides to align footer and plot title with plot
+        % rather than physical media (see /DrawFooter)
+        FooterDims begin
+        /Left PlotLeft GridLeft Ratio mul add def
+        /Right PlotLeft GridRight Ratio mul add def
+        end
+        
+        PlotLeft PlotTop translate  % translate the coordiante system so plot
+        Ratio Ratio scale           % may be rendered using screen coordinates
+        
+        end  % DataDims
+
+        % generate fonts in plot scaled coordinate system
+        /FONT_Legends 16 MakeTscFont  /FONT_Extra 11 MakeTscFont
+    }
+    bind
+
+    /ScaleForTable
+    {
+        FONT_Medium setfont
+        DataDims begin begin
+        Title SetPageTitle       % set page title to table's title
+        MeasureTable             % measure the table
+        Left Width 2 div add     % center of destination
+        W 2 div sub              % minus half the table's width 
+        Top 0.15 inch add        % top of destination
+        translate                
+        end end
+    }
+    bind
+>>
+def
+
+% font is inserted here
+20 dict dup begin
+/FontType 3 def
+/Encoding 256 array def
+  0 1 255 { Encoding exch /.notdef put } for
+/CharData 256 dict def
+  CharData /.notdef
+    3 dict dup begin
+      /DWIDTH 8 def
+      /BBX [ 8 1 0 0 ] def
+      /BITMAP < 00 > def
+    end
+  put % /.notdef
+ Encoding 32 /space put
+ CharData /space
+  3 dict dup begin
+  /DWIDTH 20 def
+  /BBX [ 8 1 0 0 ] def
+  /BITMAP <
+00
+  > def
+    end
+  put % /space
+ Encoding 33 /exclam put
+ CharData /exclam
+  3 dict dup begin
+  /DWIDTH 24 def
+  /BBX [ 10 52 8 0 ] def
+  /BITMAP <
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+7F80
+7F80
+7F80
+7F80
+7F80
+7F80
+7F80
+3F00
+3F00
+3F00
+3F00
+3F00
+3F00
+3F00
+3E00
+1E00
+1E00
+1E00
+0000
+0000
+0000
+0000
+0000
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+  > def
+    end
+  put % /exclam
+ Encoding 34 /quotedbl put
+ CharData /quotedbl
+  3 dict dup begin
+  /DWIDTH 34 def
+  /BBX [ 27 19 4 33 ] def
+  /BITMAP <
+FFC07FE0
+FFC07FE0
+FFC07FE0
+FFC07FE0
+FFC07FE0
+FFC07FE0
+FFC07FE0
+FFC07FE0
+FFC07FE0
+FFC07FE0
+FFC07FE0
+7F803FC0
+7F803FC0
+7F803FC0
+7F003F80
+3F001F80
+3F001F80
+3E001F00
+1E000F00
+  > def
+    end
+  put % /quotedbl
+ Encoding 35 /numbersign put
+ CharData /numbersign
+  3 dict dup begin
+  /DWIDTH 40 def
+  /BBX [ 40 52 0 -2 ] def
+  /BITMAP <
+0007F80FF0
+0007F00FE0
+0007F00FE0
+000FF01FE0
+000FF01FE0
+000FF01FE0
+000FE01FC0
+000FE01FC0
+001FE03FC0
+001FE03FC0
+001FE03FC0
+001FC03F80
+3FFFFFFFFF
+3FFFFFFFFF
+3FFFFFFFFF
+3FFFFFFFFF
+3FFFFFFFFF
+3FFFFFFFFF
+3FFFFFFFFF
+007F80FF00
+007F80FF00
+007F00FE00
+007F00FE00
+007F01FE00
+00FF01FE00
+00FF01FE00
+00FF01FE00
+00FE01FC00
+00FE01FC00
+01FE03FC00
+01FE03FC00
+FFFFFFFFF8
+FFFFFFFFF8
+FFFFFFFFF8
+FFFFFFFFF8
+FFFFFFFFF8
+FFFFFFFFF8
+FFFFFFFFF8
+03F807F000
+07F80FF000
+07F80FF000
+07F80FF000
+07F00FE000
+07F00FE000
+0FF01FE000
+0FF01FE000
+0FF01FE000
+0FE01FC000
+0FE01FC000
+1FE03FC000
+1FE03FC000
+1FE03FC000
+  > def
+    end
+  put % /numbersign
+ Encoding 36 /dollar put
+ CharData /dollar
+  3 dict dup begin
+  /DWIDTH 40 def
+  /BBX [ 36 64 2 -9 ] def
+  /BITMAP <
+0001F00000
+0001F00000
+0001F00000
+0001F00000
+000FFE0000
+007FFFE000
+01FFFFF000
+03FFFFFC00
+0FFFFFFE00
+0FFFFFFF00
+1FFFFFFF80
+3FFDF7FF80
+3FF1F1FFC0
+3FE1F0FFC0
+7FE1F07FE0
+7FC1F07FE0
+7FC1F03FE0
+7FC1F03FE0
+7FC1F03FE0
+7FC1F00000
+7FC1F00000
+7FE1F00000
+7FF1F00000
+3FF9F00000
+3FFFF00000
+1FFFF00000
+1FFFFE0000
+0FFFFF8000
+07FFFFF000
+03FFFFF800
+01FFFFFE00
+007FFFFF00
+000FFFFF80
+0001FFFFC0
+0001FFFFE0
+0001F3FFE0
+0001F0FFE0
+0001F07FF0
+0001F07FF0
+0001F03FF0
+FF81F03FF0
+FF81F03FF0
+FFC1F03FF0
+FFC1F03FF0
+FFC1F03FF0
+FFC1F07FE0
+7FE1F0FFE0
+7FF1F1FFE0
+3FFDF7FFC0
+3FFFFFFFC0
+1FFFFFFF80
+0FFFFFFF00
+07FFFFFE00
+03FFFFFC00
+00FFFFF000
+003FFF8000
+0001F00000
+0001F00000
+0001F00000
+0001F00000
+0001F00000
+0001F00000
+0001F00000
+0001F00000
+  > def
+    end
+  put % /dollar
+ Encoding 37 /percent put
+ CharData /percent
+  3 dict dup begin
+  /DWIDTH 64 def
+  /BBX [ 60 53 2 -2 ] def
+  /BITMAP <
+00000000007E0000
+007F8000007C0000
+01FFE00000FC0000
+07FFF80000F80000
+0FFFFC0001F80000
+1FFFFE0001F00000
+3FFFFF0003F00000
+3FFFFF0003E00000
+7FC1FF8007C00000
+7F807F800FC00000
+FF003FC00F800000
+FE001FC01F800000
+FE001FC01F000000
+FE001FC03F000000
+FE001FC03E000000
+FE001FC07E000000
+FF003FC07C000000
+7F003F80FC000000
+7F807F80F8000000
+7FE1FF81F0000000
+3FFFFF01F0000000
+3FFFFE03E0000000
+1FFFFE07E0000000
+0FFFFC07C0000000
+07FFF00FC0000000
+01FFE00F80000000
+007F001F801FE000
+0000001F007FF800
+0000003F01FFFE00
+0000003E03FFFF00
+0000007E07FFFF80
+0000007C0FFFFFC0
+000000F80FFFFFC0
+000000F81FF07FE0
+000001F01FE01FE0
+000003F03FC00FF0
+000003E03F8007F0
+000007E03F8007F0
+000007C03F8007F0
+00000FC03F8007F0
+00000F803F8007F0
+00001F803FC00FF0
+00001F001FC00FE0
+00003E001FE01FE0
+00003E001FF87FE0
+00007C000FFFFFC0
+00007C000FFFFF80
+0000F80007FFFF80
+0001F80003FFFF00
+0001F00001FFFC00
+0003F000007FF800
+0003E000000FC000
+0007C00000000000
+  > def
+    end
+  put % /percent
+ Encoding 38 /ampersand put
+ CharData /ampersand
+  3 dict dup begin
+  /DWIDTH 52 def
+  /BBX [ 46 54 4 -2 ] def
+  /BITMAP <
+000078000000
+0007FF800000
+001FFFE00000
+007FFFF80000
+00FFFFFC0000
+01FFFFFC0000
+01FFFFFE0000
+03FFFFFE0000
+03FFCFFF0000
+07FF03FF0000
+07FE01FF0000
+07FE01FF0000
+07FE01FF0000
+07FE01FF0000
+07FF01FF0000
+03FF83FE0000
+03FF87FE0000
+01FFCFFC0000
+01FFFFFC0000
+00FFFFF80000
+007FFFF00000
+003FFFE00000
+003FFF800000
+003FFF000000
+007FFF000000
+01FFFF803FC0
+03FFFFC03FC0
+0FFFFFC03FC0
+1FFFFFE03FC0
+3FFEFFF07FC0
+3FFC7FF87FC0
+7FF03FF87F80
+7FE01FFCFF80
+7FE00FFEFF80
+FFC00FFFFF00
+FFC007FFFF00
+FFC003FFFF00
+FFC001FFFE00
+FFC001FFFE00
+FFC000FFFC00
+FFE0007FF800
+FFE0003FF800
+7FF000FFFC00
+7FF801FFFE00
+7FFC07FFFF00
+3FFF3FFFFF80
+3FFFFFFFFF80
+1FFFFFFFFFC0
+0FFFFFFDFFE0
+07FFFFF8FFF0
+03FFFFE07FF8
+00FFFFC03FF8
+003FFF000000
+0003F0000000
+  > def
+    end
+  put % /ampersand
+ Encoding 39 /apostrophe put
+ CharData /apostrophe
+  3 dict dup begin
+  /DWIDTH 20 def
+  /BBX [ 10 18 5 34 ] def
+  /BITMAP <
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+03C0
+03C0
+03C0
+0780
+0780
+0F80
+3F00
+FE00
+FC00
+F000
+  > def
+    end
+  put % /apostrophe
+ Encoding 40 /parenleft put
+ CharData /parenleft
+  3 dict dup begin
+  /DWIDTH 24 def
+  /BBX [ 19 66 3 -14 ] def
+  /BITMAP <
+001FC0
+001FC0
+003F80
+007F80
+007F00
+00FF00
+00FE00
+01FE00
+03FC00
+03FC00
+07FC00
+07F800
+07F800
+0FF000
+0FF000
+1FF000
+1FE000
+1FE000
+3FE000
+3FE000
+3FC000
+7FC000
+7FC000
+7FC000
+7FC000
+7F8000
+FF8000
+FF8000
+FF8000
+FF8000
+FF8000
+FF8000
+FF8000
+FF8000
+FF8000
+FF8000
+FF8000
+FF8000
+FF8000
+FF8000
+7F8000
+7FC000
+7FC000
+7FC000
+7FC000
+3FC000
+3FE000
+3FE000
+3FE000
+1FE000
+1FF000
+0FF000
+0FF000
+0FF800
+07F800
+07FC00
+03FC00
+03FC00
+01FE00
+01FE00
+00FF00
+007F00
+007F80
+003F80
+003FC0
+001FC0
+  > def
+    end
+  put % /parenleft
+ Encoding 41 /parenright put
+ CharData /parenright
+  3 dict dup begin
+  /DWIDTH 24 def
+  /BBX [ 19 66 2 -14 ] def
+  /BITMAP <
+FE0000
+FF0000
+7F0000
+7F8000
+3FC000
+3FC000
+1FE000
+1FE000
+0FF000
+0FF800
+07F800
+07FC00
+03FC00
+03FC00
+03FE00
+01FE00
+01FF00
+01FF00
+00FF80
+00FF80
+00FF80
+007F80
+007FC0
+007FC0
+007FC0
+007FC0
+003FE0
+003FE0
+003FE0
+003FE0
+003FE0
+003FE0
+003FE0
+003FE0
+003FE0
+003FE0
+003FE0
+003FE0
+003FE0
+003FE0
+007FC0
+007FC0
+007FC0
+007FC0
+007F80
+00FF80
+00FF80
+00FF80
+00FF00
+01FF00
+01FE00
+03FE00
+03FE00
+03FC00
+07FC00
+07F800
+0FF800
+0FF000
+1FF000
+1FE000
+1FC000
+3FC000
+3F8000
+7F8000
+7F0000
+FE0000
+  > def
+    end
+  put % /parenright
+ Encoding 42 /asterisk put
+ CharData /asterisk
+  3 dict dup begin
+  /DWIDTH 28 def
+  /BBX [ 24 23 2 29 ] def
+  /BITMAP <
+007C00
+007C00
+007C00
+007C00
+007C00
+407C04
+787C1C
+7F7CFE
+FFFFFE
+FFFFFE
+FFFFFE
+1FFFF0
+03FF80
+01FF00
+03FF80
+03FFC0
+07EFC0
+0FC7E0
+1FC7F0
+1F83F8
+0F01E0
+0700C0
+020080
+  > def
+    end
+  put % /asterisk
+ Encoding 43 /plus put
+ CharData /plus
+  3 dict dup begin
+  /DWIDTH 42 def
+  /BBX [ 34 35 4 -1 ] def
+  /BITMAP <
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+FFFFFFFFC0
+FFFFFFFFC0
+FFFFFFFFC0
+FFFFFFFFC0
+FFFFFFFFC0
+FFFFFFFFC0
+FFFFFFFFC0
+FFFFFFFFC0
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+  > def
+    end
+  put % /plus
+ Encoding 44 /comma put
+ CharData /comma
+  3 dict dup begin
+  /DWIDTH 20 def
+  /BBX [ 10 23 5 -13 ] def
+  /BITMAP <
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+07C0
+07C0
+07C0
+07C0
+07C0
+0F80
+0F80
+1F00
+FF00
+FE00
+F800
+F000
+8000
+  > def
+    end
+  put % /comma
+ Encoding 45 /minus put
+ CharData /minus
+  3 dict dup begin
+  /DWIDTH 42 def
+  /BBX [ 36 8 3 13 ] def
+  /BITMAP <
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+  > def
+    end
+  put % /minus
+ Encoding 46 /period put
+ CharData /period
+  3 dict dup begin
+  /DWIDTH 20 def
+  /BBX [ 10 10 5 0 ] def
+  /BITMAP <
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+  > def
+    end
+  put % /period
+ Encoding 47 /slash put
+ CharData /slash
+  3 dict dup begin
+  /DWIDTH 20 def
+  /BBX [ 20 52 0 -1 ] def
+  /BITMAP <
+0001F0
+0003E0
+0003E0
+0003E0
+0003C0
+0007C0
+0007C0
+0007C0
+000F80
+000F80
+000F80
+000F00
+001F00
+001F00
+001F00
+001E00
+003E00
+003E00
+003C00
+007C00
+007C00
+007C00
+007800
+00F800
+00F800
+00F000
+01F000
+01F000
+01F000
+01E000
+03E000
+03E000
+03C000
+07C000
+07C000
+07C000
+078000
+0F8000
+0F8000
+0F0000
+1F0000
+1F0000
+1F0000
+1E0000
+3E0000
+3E0000
+3E0000
+3C0000
+7C0000
+7C0000
+780000
+F80000
+  > def
+    end
+  put % /slash
+ Encoding 48 /0 put
+ CharData /0
+  3 dict dup begin
+  /DWIDTH 40 def
+  /BBX [ 35 54 2 -2 ] def
+  /BITMAP <
+0001F00000
+001FFF0000
+007FFFC000
+00FFFFE000
+03FFFFF800
+07FFFFFC00
+07FFFFFC00
+0FFFFFFE00
+1FFF1FFF00
+1FFC07FF00
+3FF803FF80
+3FF001FF80
+3FF000FF80
+7FE000FFC0
+7FE000FFC0
+7FE000FFC0
+7FE000FFC0
+7FE0007FC0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+7FE0007FC0
+7FE000FFC0
+7FE000FFC0
+7FE000FFC0
+7FF000FFC0
+3FF001FF80
+3FF801FF80
+3FF803FF80
+1FFC07FF00
+1FFF1FFF00
+0FFFFFFE00
+07FFFFFC00
+07FFFFFC00
+03FFFFF800
+00FFFFE000
+007FFFC000
+001FFF0000
+0001F00000
+  > def
+    end
+  put % /0
+ Encoding 49 /1 put
+ CharData /1
+  3 dict dup begin
+  /DWIDTH 40 def
+  /BBX [ 22 51 5 0 ] def
+  /BITMAP <
+0001FC
+0001FC
+0003FC
+0003FC
+0007FC
+000FFC
+001FFC
+007FFC
+03FFFC
+FFFFFC
+FFFFFC
+FFFFFC
+FFFFFC
+FFFFFC
+FFFFFC
+FFFFFC
+000FFC
+000FFC
+000FFC
+000FFC
+000FFC
+000FFC
+000FFC
+000FFC
+000FFC
+000FFC
+000FFC
+000FFC
+000FFC
+000FFC
+000FFC
+000FFC
+000FFC
+000FFC
+000FFC
+000FFC
+000FFC
+000FFC
+000FFC
+000FFC
+000FFC
+000FFC
+000FFC
+000FFC
+000FFC
+000FFC
+000FFC
+000FFC
+000FFC
+000FFC
+000FFC
+  > def
+    end
+  put % /1
+ Encoding 50 /2 put
+ CharData /2
+  3 dict dup begin
+  /DWIDTH 40 def
+  /BBX [ 35 53 2 -1 ] def
+  /BITMAP <
+0001F00000
+003FFF8000
+00FFFFE000
+01FFFFF800
+07FFFFFC00
+07FFFFFE00
+0FFFFFFF00
+1FFFFFFF80
+1FFF1FFF80
+3FFC03FFC0
+3FF801FFC0
+3FF000FFC0
+7FF000FFE0
+7FE0007FE0
+7FE0007FE0
+7FE0007FE0
+7FE0007FE0
+7FE0007FE0
+7FE0007FE0
+0000007FE0
+000000FFE0
+000000FFC0
+000001FFC0
+000001FF80
+000003FF80
+000007FF00
+00001FFE00
+00003FFE00
+00007FFC00
+0000FFF000
+0003FFE000
+0007FFC000
+001FFF8000
+003FFE0000
+007FFC0000
+00FFF80000
+01FFF00000
+03FFC00000
+07FF800000
+0FFF000000
+1FFE000000
+1FFE000000
+3FFC000000
+3FF8000000
+3FFFFFFFE0
+7FFFFFFFE0
+7FFFFFFFE0
+7FFFFFFFE0
+7FFFFFFFE0
+FFFFFFFFE0
+FFFFFFFFE0
+FFFFFFFFE0
+FFFFFFFFE0
+  > def
+    end
+  put % /2
+ Encoding 51 /3 put
+ CharData /3
+  3 dict dup begin
+  /DWIDTH 40 def
+  /BBX [ 35 54 2 -2 ] def
+  /BITMAP <
+0003F00000
+003FFF8000
+00FFFFE000
+03FFFFF000
+07FFFFF800
+0FFFFFFC00
+1FFFFFFE00
+1FFFFFFF00
+3FFE1FFF00
+3FF807FF00
+7FF003FF80
+7FE003FF80
+7FE001FF80
+7FC001FF80
+7FC001FF80
+7FC001FF80
+7FC001FF80
+000001FF80
+000003FF00
+000003FF00
+000007FE00
+00000FFC00
+0003FFFC00
+0003FFF000
+0003FFE000
+0003FFF000
+0003FFFC00
+0003FFFE00
+0003FFFF00
+00001FFF80
+000007FF80
+000001FFC0
+000000FFC0
+000000FFE0
+0000007FE0
+0000007FE0
+0000007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC000FFE0
+7FE000FFE0
+7FE001FFC0
+7FF001FFC0
+3FF807FFC0
+3FFF1FFF80
+1FFFFFFF00
+1FFFFFFF00
+0FFFFFFE00
+07FFFFFC00
+03FFFFF800
+00FFFFE000
+003FFF8000
+0001F00000
+  > def
+    end
+  put % /3
+ Encoding 52 /4 put
+ CharData /4
+  3 dict dup begin
+  /DWIDTH 40 def
+  /BBX [ 36 51 2 0 ] def
+  /BITMAP <
+00003FFC00
+00007FFC00
+00007FFC00
+0000FFFC00
+0000FFFC00
+0001FFFC00
+0003FFFC00
+0003FFFC00
+0007FFFC00
+0007FFFC00
+000FEFFC00
+000FEFFC00
+001FCFFC00
+003FCFFC00
+003F8FFC00
+007F0FFC00
+007F0FFC00
+00FE0FFC00
+01FE0FFC00
+01FC0FFC00
+03FC0FFC00
+03F80FFC00
+07F00FFC00
+0FF00FFC00
+0FE00FFC00
+1FE00FFC00
+1FC00FFC00
+3F800FFC00
+7F800FFC00
+7F000FFC00
+FF000FFC00
+FE000FFC00
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+00000FFC00
+00000FFC00
+00000FFC00
+00000FFC00
+00000FFC00
+00000FFC00
+00000FFC00
+00000FFC00
+00000FFC00
+00000FFC00
+00000FFC00
+  > def
+    end
+  put % /4
+ Encoding 53 /5 put
+ CharData /5
+  3 dict dup begin
+  /DWIDTH 40 def
+  /BBX [ 35 53 2 -2 ] def
+  /BITMAP <
+03FFFFFF80
+03FFFFFF80
+03FFFFFF80
+07FFFFFF80
+07FFFFFF80
+07FFFFFF80
+07FFFFFF80
+07FFFFFF80
+07F0000000
+0FF0000000
+0FF0000000
+0FF0000000
+0FE0000000
+0FE0000000
+0FE0000000
+1FE0000000
+1FE0000000
+1FE1FF0000
+1FE7FFC000
+1FFFFFF000
+1FFFFFF800
+3FFFFFFE00
+3FFFFFFE00
+3FFFFFFF00
+3FFFFFFF80
+3FFC0FFF80
+3FF003FFC0
+3FE001FFC0
+000000FFC0
+000000FFE0
+0000007FE0
+0000007FE0
+0000007FE0
+0000007FE0
+0000007FE0
+0000007FE0
+0000007FE0
+0000007FE0
+FFC000FFE0
+FFC000FFC0
+FFC000FFC0
+FFE001FFC0
+7FF003FF80
+7FF807FF80
+3FFE3FFF00
+3FFFFFFF00
+1FFFFFFE00
+0FFFFFFC00
+07FFFFF800
+03FFFFF000
+00FFFFC000
+003FFF0000
+0003E00000
+  > def
+    end
+  put % /5
+ Encoding 54 /6 put
+ CharData /6
+  3 dict dup begin
+  /DWIDTH 40 def
+  /BBX [ 36 54 2 -2 ] def
+  /BITMAP <
+00007C0000
+000FFFC000
+003FFFF000
+007FFFFC00
+01FFFFFE00
+03FFFFFF00
+07FFFFFF80
+07FFFFFFC0
+0FFF87FFC0
+0FFE01FFC0
+1FF800FFE0
+1FF8007FE0
+3FF0007FE0
+3FF0000000
+7FE0000000
+7FE0000000
+7FE0000000
+7FE0000000
+7FE07F0000
+FFC3FFE000
+FFC7FFF800
+FFDFFFFC00
+FFFFFFFE00
+FFFFFFFF00
+FFFFFFFF80
+FFFFFFFFC0
+FFFE07FFC0
+FFFC01FFE0
+FFF800FFE0
+FFF000FFE0
+FFE0007FF0
+FFE0007FF0
+FFC0003FF0
+FFC0003FF0
+FFC0003FF0
+FFC0003FF0
+FFC0003FF0
+7FC0003FF0
+7FC0003FF0
+7FE0007FF0
+7FE0007FE0
+3FE000FFE0
+3FF000FFE0
+3FF801FFC0
+1FFC03FFC0
+1FFF9FFF80
+0FFFFFFF80
+07FFFFFF00
+03FFFFFE00
+01FFFFFC00
+00FFFFF800
+003FFFE000
+000FFF8000
+0000F80000
+  > def
+    end
+  put % /6
+ Encoding 55 /7 put
+ CharData /7
+  3 dict dup begin
+  /DWIDTH 40 def
+  /BBX [ 36 51 2 0 ] def
+  /BITMAP <
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFE0
+0000007FE0
+000000FFC0
+000001FF80
+000001FF00
+000003FF00
+000007FE00
+000007FC00
+00000FFC00
+00001FF800
+00001FF000
+00003FF000
+00007FE000
+00007FC000
+0000FFC000
+0000FF8000
+0001FF8000
+0001FF0000
+0003FF0000
+0003FE0000
+0007FE0000
+0007FE0000
+0007FC0000
+000FFC0000
+000FF80000
+000FF80000
+001FF80000
+001FF00000
+001FF00000
+003FF00000
+003FF00000
+003FE00000
+003FE00000
+007FE00000
+007FE00000
+007FE00000
+007FC00000
+007FC00000
+00FFC00000
+00FFC00000
+00FFC00000
+00FFC00000
+00FFC00000
+00FFC00000
+  > def
+    end
+  put % /7
+ Encoding 56 /8 put
+ CharData /8
+  3 dict dup begin
+  /DWIDTH 40 def
+  /BBX [ 36 54 2 -2 ] def
+  /BITMAP <
+0001F00000
+001FFF8000
+00FFFFE000
+01FFFFF800
+07FFFFFC00
+0FFFFFFE00
+1FFFFFFF00
+1FFFFFFF00
+3FFF0FFF80
+3FF803FF80
+7FF001FFC0
+7FE000FFC0
+7FC0007FC0
+7FC0007FC0
+7FC0007FC0
+7FC0007FC0
+7FC0007FC0
+3FE000FF80
+3FE000FF80
+3FF001FF80
+1FFC07FF00
+0FFFFFFE00
+07FFFFFC00
+01FFFFF000
+01FFFFF800
+07FFFFFC00
+0FFFFFFF00
+1FFFFFFF80
+3FFE07FF80
+3FF801FFC0
+7FF000FFE0
+7FE0007FE0
+7FE0007FE0
+FFC0007FF0
+FFC0003FF0
+FFC0003FF0
+FFC0003FF0
+FFC0003FF0
+FFC0003FF0
+FFC0003FF0
+FFE0007FF0
+FFE0007FE0
+7FF000FFE0
+7FF001FFE0
+3FFC03FFC0
+3FFF1FFFC0
+1FFFFFFF80
+1FFFFFFF00
+0FFFFFFE00
+07FFFFFC00
+01FFFFF800
+00FFFFE000
+001FFF8000
+0001F00000
+  > def
+    end
+  put % /8
+ Encoding 57 /9 put
+ CharData /9
+  3 dict dup begin
+  /DWIDTH 40 def
+  /BBX [ 35 54 2 -2 ] def
+  /BITMAP <
+0001F00000
+003FFF0000
+00FFFFC000
+01FFFFE000
+07FFFFF800
+0FFFFFFC00
+0FFFFFFC00
+1FFFFFFE00
+3FFE1FFF00
+3FF807FF00
+7FF003FF80
+7FE001FF80
+7FE000FF80
+FFE000FFC0
+FFC000FFC0
+FFC0007FC0
+FFC0007FC0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC000FFE0
+FFE000FFE0
+7FE001FFE0
+7FF001FFE0
+7FF803FFE0
+3FFC0FFFE0
+3FFFFFFFE0
+1FFFFFFFE0
+1FFFFFFFE0
+0FFFFFFFE0
+07FFFF7FE0
+01FFFE7FE0
+00FFF87FE0
+001FE07FC0
+0000007FC0
+0000007FC0
+000000FFC0
+000000FFC0
+000000FF80
+7FC001FF80
+7FE001FF80
+7FE003FF00
+7FF003FF00
+3FF807FF00
+3FFE3FFE00
+1FFFFFFC00
+1FFFFFFC00
+0FFFFFF800
+07FFFFF000
+03FFFFE000
+00FFFF8000
+003FFE0000
+0007E00000
+  > def
+    end
+  put % /9
+ Encoding 58 /colon put
+ CharData /colon
+  3 dict dup begin
+  /DWIDTH 24 def
+  /BBX [ 10 37 9 0 ] def
+  /BITMAP <
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+0000
+0000
+0000
+0000
+0000
+0000
+0000
+0000
+0000
+0000
+0000
+0000
+0000
+0000
+0000
+0000
+0000
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+  > def
+    end
+  put % /colon
+ Encoding 59 /semicolon put
+ CharData /semicolon
+  3 dict dup begin
+  /DWIDTH 24 def
+  /BBX [ 10 50 9 -13 ] def
+  /BITMAP <
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+0000
+0000
+0000
+0000
+0000
+0000
+0000
+0000
+0000
+0000
+0000
+0000
+0000
+0000
+0000
+0000
+0000
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+07C0
+07C0
+07C0
+07C0
+07C0
+0F80
+0F80
+1F00
+FF00
+FE00
+F800
+F000
+8000
+  > def
+    end
+  put % /semicolon
+ Encoding 60 /less put
+ CharData /less
+  3 dict dup begin
+  /DWIDTH 42 def
+  /BBX [ 35 35 3 -1 ] def
+  /BITMAP <
+0000000060
+00000001E0
+0000000FE0
+0000007FE0
+000001FFE0
+00000FFFE0
+00007FFFE0
+0001FFFFE0
+000FFFFF80
+007FFFFC00
+03FFFFE000
+0FFFFF0000
+7FFFF80000
+FFFFE00000
+FFFF000000
+FFF8000000
+FFC0000000
+FF00000000
+FFE0000000
+FFFC000000
+FFFF800000
+FFFFF00000
+3FFFFE0000
+07FFFFC000
+00FFFFF000
+003FFFFE00
+0007FFFFC0
+0000FFFFE0
+00003FFFE0
+000007FFE0
+000000FFE0
+0000003FE0
+00000007E0
+00000000E0
+0000000020
+  > def
+    end
+  put % /less
+ Encoding 61 /equal put
+ CharData /equal
+  3 dict dup begin
+  /DWIDTH 42 def
+  /BBX [ 34 25 4 4 ] def
+  /BITMAP <
+FFFFFFFFC0
+FFFFFFFFC0
+FFFFFFFFC0
+FFFFFFFFC0
+FFFFFFFFC0
+FFFFFFFFC0
+FFFFFFFFC0
+FFFFFFFFC0
+0000000000
+0000000000
+0000000000
+0000000000
+0000000000
+0000000000
+0000000000
+0000000000
+0000000000
+FFFFFFFFC0
+FFFFFFFFC0
+FFFFFFFFC0
+FFFFFFFFC0
+FFFFFFFFC0
+FFFFFFFFC0
+FFFFFFFFC0
+FFFFFFFFC0
+  > def
+    end
+  put % /equal
+ Encoding 62 /greater put
+ CharData /greater
+  3 dict dup begin
+  /DWIDTH 42 def
+  /BBX [ 35 35 3 -1 ] def
+  /BITMAP <
+8000000000
+F000000000
+FE00000000
+FF80000000
+FFF0000000
+FFFE000000
+FFFFC00000
+FFFFF00000
+3FFFFE0000
+07FFFFC000
+01FFFFF000
+003FFFFE00
+0007FFFFC0
+0000FFFFE0
+00001FFFE0
+000003FFE0
+0000007FE0
+0000001FE0
+000000FFE0
+000007FFE0
+00003FFFE0
+0001FFFFE0
+000FFFFF80
+003FFFFC00
+01FFFFE000
+0FFFFF8000
+7FFFFC0000
+FFFFE00000
+FFFF800000
+FFFC000000
+FFE0000000
+FF80000000
+FC00000000
+E000000000
+8000000000
+  > def
+    end
+  put % /greater
+ Encoding 63 /question put
+ CharData /question
+  3 dict dup begin
+  /DWIDTH 44 def
+  /BBX [ 35 53 5 0 ] def
+  /BITMAP <
+000FFC0000
+007FFFC000
+01FFFFF000
+03FFFFF800
+07FFFFFC00
+0FFFFFFE00
+1FFFFFFF00
+3FFFFFFF80
+3FFC0FFF80
+7FF007FFC0
+7FE001FFC0
+FFE001FFC0
+FFC000FFE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FF80007FE0
+FF80007FE0
+0000007FE0
+000000FFE0
+000000FFC0
+000001FFC0
+000003FFC0
+000007FF80
+00000FFF00
+00001FFF00
+00003FFE00
+00007FFC00
+0000FFF000
+0001FFE000
+0003FFC000
+0003FF0000
+0007FE0000
+0007FC0000
+0007F80000
+0007F80000
+0007F80000
+0007F80000
+0007F80000
+0000000000
+0000000000
+0000000000
+0000000000
+000FFC0000
+000FFC0000
+000FFC0000
+000FFC0000
+000FFC0000
+000FFC0000
+000FFC0000
+000FFC0000
+000FFC0000
+000FFC0000
+  > def
+    end
+  put % /question
+ Encoding 64 /at put
+ CharData /at
+  3 dict dup begin
+  /DWIDTH 70 def
+  /BBX [ 66 63 2 -10 ] def
+  /BITMAP <
+0000000FFFC0000000
+000000FFFFFC000000
+000007FFFFFF800000
+00001FFFFFFFE00000
+00007FFFFFFFF80000
+0001FFFFFFFFFE0000
+0003FFF0003FFF0000
+0007FF000003FF8000
+000FFC000000FFC000
+001FF00000003FE000
+003FC00000001FF000
+007F8000000007F800
+00FF0000000003FC00
+01FE0000000001FC00
+03FC0000000001FE00
+03F80000000000FE00
+07F00001FC00007F00
+07F0000FFF0FE03F00
+0FE0003FFFCFC03F80
+0FE0007FFFCFC01F80
+1FC000FFFFFFC01F80
+1FC001FF07FF801F80
+3F8003FC01FF800FC0
+3F8007F800FF800FC0
+3F0007F000FF800FC0
+7F000FE000FF000FC0
+7F000FE0007F000FC0
+7F001FC0007F000FC0
+7E001FC0007E000FC0
+FE003F80007E000FC0
+FE003F80007E001FC0
+FE003F0000FE001FC0
+FE007F0000FC001F80
+FE007F0000FC003F80
+FE007F0001FC003F80
+FE007F0001F8003F80
+FE007F0003F8007F00
+FE007F0003F800FF00
+FE007F0007F800FE00
+7F007F800FF801FE00
+7F003F801FF803FC00
+7F003FC03FF80FF800
+7F803FF0FFFC3FF800
+3F801FFFFFFFFFF000
+3FC01FFFFCFFFFE000
+3FC00FFFF8FFFF8000
+1FE007FFF07FFF0000
+1FE001FFC03FFC0000
+0FF0007F0007F00000
+07F800000000000000
+07FC00000000000000
+03FF00000000000000
+01FF80000000000000
+00FFE0000000000000
+007FF8000000000000
+003FFE000003000000
+001FFFE0007F000000
+0007FFFFFFFF800000
+0003FFFFFFFF800000
+0000FFFFFFFFC00000
+00003FFFFFFF000000
+000007FFFFF8000000
+0000003FFF00000000
+  > def
+    end
+  put % /at
+ Encoding 65 /A put
+ CharData /A
+  3 dict dup begin
+  /DWIDTH 52 def
+  /BBX [ 48 52 2 0 ] def
+  /BITMAP <
+00003FFE0000
+00003FFE0000
+00003FFE0000
+00007FFF0000
+00007FFF0000
+00007FFF0000
+0000FFFF8000
+0000FFFF8000
+0001FFFF8000
+0001FFFFC000
+0001FFFFC000
+0003FFFFC000
+0003FF7FE000
+0003FF7FE000
+0007FE7FE000
+0007FE3FF000
+0007FE3FF000
+000FFC3FF800
+000FFC3FF800
+000FFC1FF800
+001FF81FFC00
+001FF81FFC00
+003FF80FFC00
+003FF00FFE00
+003FF00FFE00
+007FF007FE00
+007FE007FF00
+007FE007FF00
+00FFE003FF00
+00FFE003FF80
+00FFC003FF80
+01FFC001FF80
+01FFC001FFC0
+01FFFFFFFFC0
+03FFFFFFFFC0
+03FFFFFFFFE0
+03FFFFFFFFE0
+07FFFFFFFFE0
+07FFFFFFFFF0
+0FFFFFFFFFF0
+0FFFFFFFFFF8
+0FFC00003FF8
+1FFC00003FF8
+1FFC00001FFC
+1FF800001FFC
+3FF800001FFC
+3FF800000FFE
+3FF000000FFE
+7FF000000FFE
+7FF0000007FF
+7FE0000007FF
+FFE0000007FF
+  > def
+    end
+  put % /A
+ Encoding 66 /B put
+ CharData /B
+  3 dict dup begin
+  /DWIDTH 52 def
+  /BBX [ 42 52 6 0 ] def
+  /BITMAP <
+FFFFFFF80000
+FFFFFFFF0000
+FFFFFFFFC000
+FFFFFFFFE000
+FFFFFFFFF000
+FFFFFFFFF800
+FFFFFFFFFC00
+FFFFFFFFFC00
+FFC0003FFE00
+FFC0000FFE00
+FFC00007FF00
+FFC00007FF00
+FFC00003FF00
+FFC00003FF00
+FFC00003FF00
+FFC00003FF00
+FFC00003FF00
+FFC00007FE00
+FFC00007FE00
+FFC0000FFE00
+FFC0003FFC00
+FFFFFFFFF800
+FFFFFFFFF000
+FFFFFFFFE000
+FFFFFFFFC000
+FFFFFFFFE000
+FFFFFFFFF000
+FFFFFFFFF800
+FFFFFFFFFC00
+FFC0001FFE00
+FFC00007FF00
+FFC00003FF80
+FFC00001FF80
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00001FFC0
+FFC00001FFC0
+FFC00003FF80
+FFC00007FF80
+FFC0001FFF00
+FFFFFFFFFF00
+FFFFFFFFFE00
+FFFFFFFFFC00
+FFFFFFFFFC00
+FFFFFFFFF000
+FFFFFFFFE000
+FFFFFFFF8000
+FFFFFFF80000
+  > def
+    end
+  put % /B
+ Encoding 67 /C put
+ CharData /C
+  3 dict dup begin
+  /DWIDTH 52 def
+  /BBX [ 45 55 4 -2 ] def
+  /BITMAP <
+00003FF80000
+0003FFFF0000
+000FFFFFE000
+003FFFFFF000
+007FFFFFFC00
+00FFFFFFFE00
+01FFFFFFFF00
+03FFFFFFFF80
+07FFF01FFFC0
+0FFFC007FFC0
+0FFF0001FFE0
+1FFE0000FFE0
+1FFC0000FFF0
+3FF800007FF0
+3FF800007FF0
+3FF000003FF8
+7FF000003FF8
+7FF000001FF8
+7FE000000000
+7FE000000000
+FFE000000000
+FFC000000000
+FFC000000000
+FFC000000000
+FFC000000000
+FFC000000000
+FFC000000000
+FFC000000000
+FFC000000000
+FFC000000000
+FFC000000000
+FFC000000000
+FFC000000000
+FFE000000000
+7FE000000000
+7FE000001FF8
+7FE000001FF8
+7FF000003FF8
+7FF000003FF8
+3FF000003FF8
+3FF800007FF0
+1FFC00007FF0
+1FFC0000FFF0
+1FFE0001FFE0
+0FFF0003FFE0
+07FFC00FFFC0
+07FFF87FFF80
+03FFFFFFFF80
+01FFFFFFFF00
+00FFFFFFFE00
+007FFFFFF800
+001FFFFFF000
+0007FFFFC000
+0001FFFE0000
+00000FC00000
+  > def
+    end
+  put % /C
+ Encoding 68 /D put
+ CharData /D
+  3 dict dup begin
+  /DWIDTH 52 def
+  /BBX [ 43 52 6 0 ] def
+  /BITMAP <
+FFFFFFC00000
+FFFFFFFC0000
+FFFFFFFF0000
+FFFFFFFFC000
+FFFFFFFFE000
+FFFFFFFFF000
+FFFFFFFFF800
+FFFFFFFFFC00
+FFC000FFFC00
+FFC0003FFE00
+FFC0000FFF00
+FFC00007FF00
+FFC00007FF80
+FFC00003FF80
+FFC00001FF80
+FFC00001FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFE0
+FFC000007FE0
+FFC000007FE0
+FFC000007FE0
+FFC000007FE0
+FFC000007FE0
+FFC000007FE0
+FFC000007FE0
+FFC000007FE0
+FFC000007FE0
+FFC000007FE0
+FFC000007FE0
+FFC000007FE0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00001FFC0
+FFC00001FFC0
+FFC00001FF80
+FFC00003FF80
+FFC00007FF00
+FFC0000FFF00
+FFC0001FFF00
+FFC0003FFE00
+FFC000FFFC00
+FFFFFFFFFC00
+FFFFFFFFF800
+FFFFFFFFF000
+FFFFFFFFE000
+FFFFFFFFC000
+FFFFFFFF0000
+FFFFFFFC0000
+FFFFFFC00000
+  > def
+    end
+  put % /D
+ Encoding 69 /E put
+ CharData /E
+  3 dict dup begin
+  /DWIDTH 48 def
+  /BBX [ 39 52 6 0 ] def
+  /BITMAP <
+FFFFFFFFFC
+FFFFFFFFFC
+FFFFFFFFFC
+FFFFFFFFFC
+FFFFFFFFFC
+FFFFFFFFFC
+FFFFFFFFFC
+FFFFFFFFFC
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFFFFFFFFE
+FFFFFFFFFE
+FFFFFFFFFE
+FFFFFFFFFE
+FFFFFFFFFE
+FFFFFFFFFE
+FFFFFFFFFE
+FFFFFFFFFE
+  > def
+    end
+  put % /E
+ Encoding 70 /F put
+ CharData /F
+  3 dict dup begin
+  /DWIDTH 44 def
+  /BBX [ 36 52 6 0 ] def
+  /BITMAP <
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFFFFFFF80
+FFFFFFFF80
+FFFFFFFF80
+FFFFFFFF80
+FFFFFFFF80
+FFFFFFFF80
+FFFFFFFF80
+FFFFFFFF80
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+  > def
+    end
+  put % /F
+ Encoding 71 /G put
+ CharData /G
+  3 dict dup begin
+  /DWIDTH 56 def
+  /BBX [ 48 55 3 -2 ] def
+  /BITMAP <
+00000FFE0000
+0000FFFFE000
+0003FFFFFC00
+000FFFFFFE00
+001FFFFFFF80
+007FFFFFFFC0
+00FFFFFFFFE0
+01FFFFFFFFF0
+03FFFC07FFF8
+07FFE001FFF8
+07FF80007FFC
+0FFF00003FFE
+0FFE00001FFE
+1FFC00000FFE
+1FF8000007FF
+3FF8000007FF
+3FF0000003FF
+7FF000000000
+7FE000000000
+7FE000000000
+7FE000000000
+FFE000000000
+FFC000000000
+FFC000000000
+FFC000000000
+FFC0001FFFFF
+FFC0001FFFFF
+FFC0001FFFFF
+FFC0001FFFFF
+FFC0001FFFFF
+FFC0001FFFFF
+FFC0001FFFFF
+FFE0001FFFFF
+7FE0000001FF
+7FE0000001FF
+7FE0000001FF
+7FF0000003FF
+3FF0000003FF
+3FF8000003FF
+3FFC000007FF
+1FFC00000FFF
+1FFE00000FFF
+0FFF00001FFF
+0FFF80007FFF
+07FFE000FFFF
+03FFF003FFFF
+01FFFF1FFFFF
+01FFFFFFFE7F
+00FFFFFFFE7F
+003FFFFFFC7F
+001FFFFFF87F
+0007FFFFE07F
+0003FFFFC03F
+00007FFF0000
+000003E00000
+  > def
+    end
+  put % /G
+ Encoding 72 /H put
+ CharData /H
+  3 dict dup begin
+  /DWIDTH 52 def
+  /BBX [ 42 52 5 0 ] def
+  /BITMAP <
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFFFFFFFFFC0
+FFFFFFFFFFC0
+FFFFFFFFFFC0
+FFFFFFFFFFC0
+FFFFFFFFFFC0
+FFFFFFFFFFC0
+FFFFFFFFFFC0
+FFFFFFFFFFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+  > def
+    end
+  put % /H
+ Encoding 73 /I put
+ CharData /I
+  3 dict dup begin
+  /DWIDTH 20 def
+  /BBX [ 10 52 5 0 ] def
+  /BITMAP <
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+  > def
+    end
+  put % /I
+ Encoding 74 /J put
+ CharData /J
+  3 dict dup begin
+  /DWIDTH 40 def
+  /BBX [ 33 54 2 -2 ] def
+  /BITMAP <
+000001FF80
+000001FF80
+000001FF80
+000001FF80
+000001FF80
+000001FF80
+000001FF80
+000001FF80
+000001FF80
+000001FF80
+000001FF80
+000001FF80
+000001FF80
+000001FF80
+000001FF80
+000001FF80
+000001FF80
+000001FF80
+000001FF80
+000001FF80
+000001FF80
+000001FF80
+000001FF80
+000001FF80
+000001FF80
+000001FF80
+000001FF80
+000001FF80
+000001FF80
+000001FF80
+000001FF80
+000001FF80
+000001FF80
+FFC001FF80
+FFC001FF80
+FFC001FF80
+FFC001FF80
+FFC001FF80
+FFC001FF80
+FFC001FF80
+FFC001FF80
+FFE003FF80
+FFE003FF80
+7FF007FF00
+7FF80FFF00
+7FFE3FFF00
+3FFFFFFE00
+1FFFFFFC00
+1FFFFFFC00
+0FFFFFF800
+03FFFFF000
+01FFFFC000
+007FFF0000
+0007E00000
+  > def
+    end
+  put % /J
+ Encoding 75 /K put
+ CharData /K
+  3 dict dup begin
+  /DWIDTH 52 def
+  /BBX [ 46 52 6 0 ] def
+  /BITMAP <
+FFC00003FFC0
+FFC00007FFC0
+FFC0000FFF80
+FFC0000FFF00
+FFC0001FFE00
+FFC0003FFC00
+FFC0007FF800
+FFC000FFF000
+FFC001FFE000
+FFC003FFC000
+FFC007FF8000
+FFC007FF0000
+FFC00FFE0000
+FFC01FFC0000
+FFE03FF80000
+FFE07FF80000
+FFE0FFF00000
+FFE1FFE00000
+FFE3FFC00000
+FFE7FF800000
+FFE7FF000000
+FFEFFE000000
+FFFFFE000000
+FFFFFE000000
+FFFFFF000000
+FFFFFF800000
+FFFFFFC00000
+FFFFFFE00000
+FFFFFFE00000
+FFFEFFF00000
+FFFC7FF80000
+FFF87FFC0000
+FFF03FFC0000
+FFE01FFE0000
+FFC00FFF0000
+FFC00FFF8000
+FFC007FFC000
+FFC003FFC000
+FFC001FFE000
+FFC001FFF000
+FFC000FFF800
+FFC0007FF800
+FFC0003FFC00
+FFC0003FFE00
+FFC0001FFF00
+FFC0000FFF00
+FFC00007FF80
+FFC00007FFC0
+FFC00003FFE0
+FFC00001FFF0
+FFC00000FFF0
+FFC00000FFF8
+  > def
+    end
+  put % /K
+ Encoding 76 /L put
+ CharData /L
+  3 dict dup begin
+  /DWIDTH 44 def
+  /BBX [ 36 52 6 0 ] def
+  /BITMAP <
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+  > def
+    end
+  put % /L
+ Encoding 77 /M put
+ CharData /M
+  3 dict dup begin
+  /DWIDTH 60 def
+  /BBX [ 50 52 5 0 ] def
+  /BITMAP <
+FFFF00003FFFC0
+FFFF00003FFFC0
+FFFF00003FFFC0
+FFFF80003FFFC0
+FFFF80003FFFC0
+FFFF80007FFFC0
+FFFF80007FFFC0
+FFFFC0007FFFC0
+FFFFC0007FFFC0
+FFFFC000FFFFC0
+FFFFC000FFFFC0
+FFFFC000FFFFC0
+FFFFE000FFFFC0
+FFDFE000FEFFC0
+FFDFE001FEFFC0
+FFDFE001FCFFC0
+FFDFF001FCFFC0
+FFCFF001FCFFC0
+FFCFF003FCFFC0
+FFCFF003F8FFC0
+FFCFF803F8FFC0
+FFC7F803F8FFC0
+FFC7F803F8FFC0
+FFC7F807F8FFC0
+FFC7F807F0FFC0
+FFC7FC07F0FFC0
+FFC3FC07F0FFC0
+FFC3FC0FF0FFC0
+FFC3FC0FF0FFC0
+FFC3FE0FE0FFC0
+FFC1FE0FE0FFC0
+FFC1FE0FE0FFC0
+FFC1FE1FE0FFC0
+FFC1FF1FE0FFC0
+FFC0FF1FC0FFC0
+FFC0FF1FC0FFC0
+FFC0FF3FC0FFC0
+FFC0FF3FC0FFC0
+FFC07FBFC0FFC0
+FFC07FBF80FFC0
+FFC07FBF80FFC0
+FFC07FFF80FFC0
+FFC03FFF80FFC0
+FFC03FFF00FFC0
+FFC03FFF00FFC0
+FFC03FFF00FFC0
+FFC01FFF00FFC0
+FFC01FFF00FFC0
+FFC01FFE00FFC0
+FFC01FFE00FFC0
+FFC00FFE00FFC0
+FFC00FFE00FFC0
+  > def
+    end
+  put % /M
+ Encoding 78 /N put
+ CharData /N
+  3 dict dup begin
+  /DWIDTH 52 def
+  /BBX [ 42 52 5 0 ] def
+  /BITMAP <
+FFE00000FFC0
+FFF00000FFC0
+FFF00000FFC0
+FFF80000FFC0
+FFFC0000FFC0
+FFFC0000FFC0
+FFFE0000FFC0
+FFFE0000FFC0
+FFFF0000FFC0
+FFFF8000FFC0
+FFFF8000FFC0
+FFFFC000FFC0
+FFFFC000FFC0
+FFFFE000FFC0
+FFFFF000FFC0
+FFFFF000FFC0
+FFFFF800FFC0
+FFDFF800FFC0
+FFCFFC00FFC0
+FFCFFE00FFC0
+FFC7FE00FFC0
+FFC7FF00FFC0
+FFC3FF00FFC0
+FFC1FF80FFC0
+FFC1FFC0FFC0
+FFC0FFC0FFC0
+FFC07FE0FFC0
+FFC07FE0FFC0
+FFC03FF0FFC0
+FFC03FF8FFC0
+FFC01FF8FFC0
+FFC00FFCFFC0
+FFC00FFCFFC0
+FFC007FEFFC0
+FFC007FFFFC0
+FFC003FFFFC0
+FFC001FFFFC0
+FFC001FFFFC0
+FFC000FFFFC0
+FFC000FFFFC0
+FFC0007FFFC0
+FFC0003FFFC0
+FFC0003FFFC0
+FFC0001FFFC0
+FFC0001FFFC0
+FFC0000FFFC0
+FFC00007FFC0
+FFC00007FFC0
+FFC00003FFC0
+FFC00003FFC0
+FFC00001FFC0
+FFC00000FFC0
+  > def
+    end
+  put % /N
+ Encoding 79 /O put
+ CharData /O
+  3 dict dup begin
+  /DWIDTH 56 def
+  /BBX [ 50 55 3 -2 ] def
+  /BITMAP <
+00000FFE000000
+0000FFFFC00000
+0003FFFFF80000
+000FFFFFFC0000
+003FFFFFFF0000
+007FFFFFFF8000
+00FFFFFFFFC000
+01FFFFFFFFE000
+03FFF807FFF000
+07FFE001FFF800
+07FF80007FF800
+0FFF00003FFC00
+0FFE00001FFE00
+1FFC00000FFE00
+1FFC000007FF00
+3FF8000007FF00
+3FF0000003FF00
+7FF0000003FF80
+7FE0000001FF80
+7FE0000001FF80
+7FE0000001FF80
+FFE0000001FFC0
+FFC0000000FFC0
+FFC0000000FFC0
+FFC0000000FFC0
+FFC0000000FFC0
+FFC0000000FFC0
+FFC0000000FFC0
+FFC0000000FFC0
+FFC0000000FFC0
+FFC0000000FFC0
+FFC0000000FFC0
+FFE0000000FFC0
+7FE0000001FF80
+7FE0000001FF80
+7FE0000001FF80
+7FF0000003FF80
+3FF0000003FF00
+3FF8000007FF00
+3FF8000007FF00
+1FFC00000FFE00
+1FFE00001FFE00
+0FFF00001FFC00
+0FFF80003FFC00
+07FFC000FFF800
+03FFF003FFF000
+01FFFE1FFFE000
+01FFFFFFFFE000
+00FFFFFFFFC000
+003FFFFFFF0000
+001FFFFFFE0000
+000FFFFFFC0000
+0003FFFFF00000
+00007FFF800000
+000003F0000000
+  > def
+    end
+  put % /O
+ Encoding 80 /P put
+ CharData /P
+  3 dict dup begin
+  /DWIDTH 48 def
+  /BBX [ 39 52 6 0 ] def
+  /BITMAP <
+FFFFFFF000
+FFFFFFFE00
+FFFFFFFF80
+FFFFFFFFC0
+FFFFFFFFE0
+FFFFFFFFF0
+FFFFFFFFF8
+FFFFFFFFF8
+FFC000FFFC
+FFC0003FFC
+FFC0001FFC
+FFC0000FFE
+FFC0000FFE
+FFC00007FE
+FFC00007FE
+FFC00007FE
+FFC00007FE
+FFC00007FE
+FFC00007FE
+FFC00007FE
+FFC0000FFE
+FFC0000FFC
+FFC0001FFC
+FFC0003FFC
+FFC000FFF8
+FFFFFFFFF8
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFE0
+FFFFFFFFC0
+FFFFFFFF80
+FFFFFFFE00
+FFFFFFF000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+  > def
+    end
+  put % /P
+ Encoding 81 /Q put
+ CharData /Q
+  3 dict dup begin
+  /DWIDTH 56 def
+  /BBX [ 50 57 3 -4 ] def
+  /BITMAP <
+00000FFE000000
+0000FFFFC00000
+0003FFFFF80000
+000FFFFFFC0000
+003FFFFFFF0000
+007FFFFFFF8000
+00FFFFFFFFC000
+01FFFFFFFFE000
+03FFFC07FFF000
+07FFE001FFF800
+07FF80007FF800
+0FFF00003FFC00
+0FFE00001FFC00
+1FFC00000FFE00
+1FFC000007FE00
+3FF8000007FF00
+3FF0000003FF00
+7FF0000003FF80
+7FF0000001FF80
+7FE0000001FF80
+7FE0000001FF80
+FFE0000001FFC0
+FFC0000000FFC0
+FFC0000000FFC0
+FFC0000000FFC0
+FFC0000000FFC0
+FFC0000000FFC0
+FFC0000000FFC0
+FFC0000000FFC0
+FFC0000000FFC0
+FFC0000000FFC0
+FFC0000000FFC0
+FFE0000001FFC0
+7FE0000101FFC0
+7FE0000381FF80
+7FE00007C1FF80
+7FF0000FE3FF80
+3FF0001FF3FF80
+3FF8003FFFFF80
+3FF8001FFFFF00
+1FFC000FFFFF00
+1FFE0007FFFF00
+0FFF0003FFFE00
+0FFF8001FFFE00
+07FFC001FFFE00
+03FFF007FFFC00
+01FFFE3FFFF800
+01FFFFFFFFFC00
+00FFFFFFFFFE00
+003FFFFFFFFF00
+001FFFFFFFFF80
+000FFFFFFDFFC0
+0003FFFFF0FF80
+00007FFFC03F00
+000003F8001E00
+00000000000C00
+00000000000400
+  > def
+    end
+  put % /Q
+ Encoding 82 /R put
+ CharData /R
+  3 dict dup begin
+  /DWIDTH 52 def
+  /BBX [ 43 52 6 0 ] def
+  /BITMAP <
+FFFFFFFF0000
+FFFFFFFFE000
+FFFFFFFFF800
+FFFFFFFFFC00
+FFFFFFFFFE00
+FFFFFFFFFF00
+FFFFFFFFFF00
+FFFFFFFFFF80
+FFC0001FFF80
+FFC00007FF80
+FFC00003FFC0
+FFC00001FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FFC0
+FFC00000FF80
+FFC00001FF80
+FFC00003FF80
+FFC00007FF00
+FFC0001FFF00
+FFFFFFFFFE00
+FFFFFFFFFC00
+FFFFFFFFF800
+FFFFFFFFE000
+FFFFFFFF8000
+FFFFFFFFF000
+FFFFFFFFF800
+FFFFFFFFFC00
+FFC0003FFE00
+FFC0000FFE00
+FFC00007FF00
+FFC00007FF00
+FFC00007FF00
+FFC00003FF00
+FFC00003FF00
+FFC00003FF00
+FFC00003FF00
+FFC00003FF00
+FFC00003FF00
+FFC00003FF00
+FFC00003FF00
+FFC00003FF00
+FFC00003FF00
+FFC00003FF00
+FFC00003FF80
+FFC00003FF80
+FFC00003FFC0
+FFC00003FFE0
+FFC00001FFE0
+  > def
+    end
+  put % /R
+ Encoding 83 /S put
+ CharData /S
+  3 dict dup begin
+  /DWIDTH 48 def
+  /BBX [ 43 55 2 -2 ] def
+  /BITMAP <
+0001FFE00000
+001FFFFE0000
+007FFFFF8000
+01FFFFFFE000
+03FFFFFFF000
+07FFFFFFF800
+0FFFFFFFFC00
+1FFFFFFFFE00
+1FFF807FFE00
+3FFC001FFF00
+3FF80007FF00
+3FF00003FF80
+7FF00003FF80
+7FE00001FF80
+7FE00001FF80
+7FE00001FF80
+7FE00000FF80
+7FF000000000
+7FF800000000
+7FFC00000000
+3FFF80000000
+3FFFF8000000
+3FFFFFC00000
+1FFFFFFE0000
+0FFFFFFFC000
+07FFFFFFF800
+03FFFFFFFC00
+00FFFFFFFE00
+003FFFFFFF00
+0003FFFFFF80
+00001FFFFFC0
+000000FFFFC0
+0000000FFFC0
+00000003FFE0
+00000001FFE0
+00000000FFE0
+000000007FE0
+FFC000007FE0
+FFC000007FE0
+7FE000007FE0
+7FE000007FE0
+7FF000007FE0
+7FF00000FFC0
+3FF80001FFC0
+3FFC0003FFC0
+3FFF000FFF80
+1FFFF07FFF80
+0FFFFFFFFF00
+07FFFFFFFE00
+03FFFFFFFC00
+01FFFFFFF800
+00FFFFFFF000
+003FFFFFC000
+0007FFFE0000
+00001F800000
+  > def
+    end
+  put % /S
+ Encoding 84 /T put
+ CharData /T
+  3 dict dup begin
+  /DWIDTH 44 def
+  /BBX [ 42 52 1 0 ] def
+  /BITMAP <
+FFFFFFFFFFC0
+FFFFFFFFFFC0
+FFFFFFFFFFC0
+FFFFFFFFFFC0
+FFFFFFFFFFC0
+FFFFFFFFFFC0
+FFFFFFFFFFC0
+FFFFFFFFFFC0
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+0000FFC00000
+  > def
+    end
+  put % /T
+ Encoding 85 /U put
+ CharData /U
+  3 dict dup begin
+  /DWIDTH 52 def
+  /BBX [ 41 54 6 -2 ] def
+  /BITMAP <
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFC00001FF80
+FFE00003FF80
+7FE00003FF00
+7FF00007FF00
+7FF0000FFF00
+3FF8001FFE00
+3FFE003FFE00
+1FFFC3FFFC00
+1FFFFFFFFC00
+0FFFFFFFF800
+07FFFFFFF000
+01FFFFFFC000
+00FFFFFF8000
+003FFFFE0000
+000FFFF00000
+00007E000000
+  > def
+    end
+  put % /U
+ Encoding 86 /V put
+ CharData /V
+  3 dict dup begin
+  /DWIDTH 48 def
+  /BBX [ 45 52 2 0 ] def
+  /BITMAP <
+FFE000007FF0
+FFE000007FF0
+7FE000007FE0
+7FF000007FE0
+7FF00000FFE0
+3FF00000FFC0
+3FF80000FFC0
+3FF80001FFC0
+1FF80001FF80
+1FF80001FF80
+1FFC0001FF80
+0FFC0003FF00
+0FFC0003FF00
+0FFE0003FF00
+07FE0007FE00
+07FE0007FE00
+07FE0007FE00
+03FF0007FC00
+03FF000FFC00
+03FF000FFC00
+01FF800FF800
+01FF801FF800
+01FF801FF800
+00FFC01FF000
+00FFC03FF000
+00FFC03FF000
+007FC03FE000
+007FE03FE000
+007FE07FE000
+003FE07FC000
+003FF07FC000
+003FF0FFC000
+001FF0FF8000
+001FF8FF8000
+001FF8FF8000
+000FF9FF0000
+000FF9FF0000
+000FFDFE0000
+0007FFFE0000
+0007FFFE0000
+0007FFFC0000
+0003FFFC0000
+0003FFFC0000
+0001FFF80000
+0001FFF80000
+0001FFF80000
+0000FFF00000
+0000FFF00000
+0000FFF00000
+00007FE00000
+00007FE00000
+00007FE00000
+  > def
+    end
+  put % /V
+ Encoding 87 /W put
+ CharData /W
+  3 dict dup begin
+  /DWIDTH 68 def
+  /BBX [ 66 52 1 0 ] def
+  /BITMAP <
+FFE0001FFC0003FFC0
+FFF0001FFE0003FF80
+7FF0001FFE0003FF80
+7FF0001FFE0003FF80
+7FF0001FFE0003FF80
+3FF8003FFE0007FF00
+3FF8003FFF0007FF00
+3FF8003FFF0007FF00
+3FF8003FFF0007FF00
+1FF8003FFF0007FE00
+1FFC007FFF800FFE00
+1FFC007FFF800FFE00
+1FFC007FFF800FFC00
+0FFC007F3F800FFC00
+0FFC007F3F800FFC00
+0FFE00FF3FC01FFC00
+07FE00FF3FC01FF800
+07FE00FF3FC01FF800
+07FE00FE1FC01FF800
+07FE00FE1FC01FF000
+03FF01FE1FE03FF000
+03FF01FE1FE03FF000
+03FF01FE1FE03FF000
+01FF01FC0FE03FE000
+01FF03FC0FF03FE000
+01FF83FC0FF07FE000
+01FF83FC0FF07FE000
+00FF83FC07F07FC000
+00FF83F807F07FC000
+00FFC7F807F87FC000
+007FC7F807F8FF8000
+007FC7F807F8FF8000
+007FC7F803F8FF8000
+007FC7F003FCFF8000
+003FEFF003FCFF0000
+003FEFF003FDFF0000
+003FEFF003FDFF0000
+001FEFE001FDFE0000
+001FEFE001FFFE0000
+001FFFE001FFFE0000
+001FFFE001FFFE0000
+000FFFE000FFFC0000
+000FFFC000FFFC0000
+000FFFC000FFFC0000
+0007FFC000FFFC0000
+0007FFC000FFF80000
+0007FFC0007FF80000
+0007FF80007FF80000
+0003FF80007FF00000
+0003FF80007FF00000
+0003FF80007FF00000
+0001FF80003FF00000
+  > def
+    end
+  put % /W
+ Encoding 88 /X put
+ CharData /X
+  3 dict dup begin
+  /DWIDTH 48 def
+  /BBX [ 45 52 2 0 ] def
+  /BITMAP <
+FFF80001FFF0
+7FFC0001FFE0
+3FFC0003FFC0
+3FFE0003FFC0
+1FFE0007FF80
+0FFF0007FF80
+0FFF800FFF00
+07FF801FFE00
+07FFC01FFE00
+03FFC03FFC00
+01FFE03FF800
+01FFE07FF800
+00FFF07FF000
+007FF0FFF000
+007FF9FFE000
+003FF9FFC000
+003FFFFFC000
+001FFFFF8000
+000FFFFF0000
+000FFFFF0000
+0007FFFE0000
+0003FFFC0000
+0003FFFC0000
+0001FFF80000
+0001FFF80000
+0000FFF00000
+0000FFF80000
+0001FFFC0000
+0003FFFC0000
+0003FFFE0000
+0007FFFE0000
+000FFFFF0000
+000FFFFF8000
+001FFFFF8000
+001FFFFFC000
+003FF9FFE000
+007FF8FFE000
+007FF0FFF000
+00FFE07FF000
+00FFE07FF800
+01FFC03FFC00
+03FFC03FFC00
+03FF801FFE00
+07FF801FFF00
+0FFF000FFF00
+0FFF0007FF80
+1FFE0007FF80
+1FFE0003FFC0
+3FFC0003FFE0
+7FF80001FFE0
+7FF80001FFF0
+FFF00000FFF8
+  > def
+    end
+  put % /X
+ Encoding 89 /Y put
+ CharData /Y
+  3 dict dup begin
+  /DWIDTH 48 def
+  /BBX [ 45 52 2 0 ] def
+  /BITMAP <
+FFF00000FFF0
+7FF80000FFF0
+7FF80000FFE0
+3FFC0001FFE0
+3FFC0001FFC0
+1FFE0003FFC0
+0FFE0003FF80
+0FFF0003FF80
+07FF0007FF00
+07FF8007FF00
+03FF800FFE00
+03FFC00FFE00
+01FFC00FFC00
+01FFE01FFC00
+00FFE01FF800
+007FF03FF800
+007FF03FF000
+003FF87FF000
+003FF87FE000
+001FFC7FE000
+001FFCFFC000
+000FFEFFC000
+000FFFFF8000
+0007FFFF8000
+0003FFFF0000
+0003FFFF0000
+0001FFFE0000
+0001FFFE0000
+0000FFFC0000
+0000FFFC0000
+00007FF80000
+00007FF80000
+00003FF00000
+00003FF00000
+00003FF00000
+00003FF00000
+00003FF00000
+00003FF00000
+00003FF00000
+00003FF00000
+00003FF00000
+00003FF00000
+00003FF00000
+00003FF00000
+00003FF00000
+00003FF00000
+00003FF00000
+00003FF00000
+00003FF00000
+00003FF00000
+00003FF00000
+00003FF00000
+  > def
+    end
+  put % /Y
+ Encoding 90 /Z put
+ CharData /Z
+  3 dict dup begin
+  /DWIDTH 44 def
+  /BBX [ 40 52 2 0 ] def
+  /BITMAP <
+FFFFFFFFFF
+FFFFFFFFFF
+FFFFFFFFFF
+FFFFFFFFFF
+FFFFFFFFFF
+FFFFFFFFFF
+FFFFFFFFFF
+FFFFFFFFFF
+0000001FFE
+0000003FFC
+0000007FFC
+000000FFF8
+000000FFF0
+000001FFE0
+000003FFE0
+000007FFC0
+000007FF80
+00000FFF00
+00001FFF00
+00003FFE00
+00003FFC00
+00007FFC00
+0000FFF800
+0001FFF000
+0001FFE000
+0003FFE000
+0007FFC000
+000FFF8000
+000FFF0000
+001FFF0000
+003FFE0000
+007FFC0000
+007FF80000
+00FFF80000
+01FFF00000
+03FFE00000
+03FFC00000
+07FFC00000
+0FFF800000
+0FFF000000
+1FFE000000
+3FFE000000
+7FFC000000
+7FF8000000
+FFFFFFFFFF
+FFFFFFFFFF
+FFFFFFFFFF
+FFFFFFFFFF
+FFFFFFFFFF
+FFFFFFFFFF
+FFFFFFFFFF
+FFFFFFFFFF
+  > def
+    end
+  put % /Z
+ Encoding 91 /bracketleft put
+ CharData /bracketleft
+  3 dict dup begin
+  /DWIDTH 24 def
+  /BBX [ 18 66 4 -14 ] def
+  /BITMAP <
+FFFFC0
+FFFFC0
+FFFFC0
+FFFFC0
+FFFFC0
+FFFFC0
+FFFFC0
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFFFC0
+FFFFC0
+FFFFC0
+FFFFC0
+FFFFC0
+FFFFC0
+FFFFC0
+  > def
+    end
+  put % /bracketleft
+ Encoding 92 /backslash put
+ CharData /backslash
+  3 dict dup begin
+  /DWIDTH 20 def
+  /BBX [ 22 52 -1 -1 ] def
+  /BITMAP <
+F80000
+7C0000
+7C0000
+7C0000
+3E0000
+3E0000
+3E0000
+1E0000
+1F0000
+1F0000
+0F0000
+0F8000
+0F8000
+078000
+07C000
+07C000
+03C000
+03E000
+03E000
+01E000
+01F000
+01F000
+01F000
+00F800
+00F800
+00F800
+007C00
+007C00
+007C00
+003E00
+003E00
+003E00
+001F00
+001F00
+001F00
+000F00
+000F80
+000F80
+000780
+0007C0
+0007C0
+0003C0
+0003E0
+0003E0
+0001E0
+0001F0
+0001F0
+0000F0
+0000F8
+0000F8
+0000F8
+00007C
+  > def
+    end
+  put % /backslash
+ Encoding 93 /bracketright put
+ CharData /bracketright
+  3 dict dup begin
+  /DWIDTH 24 def
+  /BBX [ 18 66 1 -14 ] def
+  /BITMAP <
+FFFFC0
+FFFFC0
+FFFFC0
+FFFFC0
+FFFFC0
+FFFFC0
+FFFFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+00FFC0
+FFFFC0
+FFFFC0
+FFFFC0
+FFFFC0
+FFFFC0
+FFFFC0
+FFFFC0
+  > def
+    end
+  put % /bracketright
+ Encoding 94 /asciicircum put
+ CharData /asciicircum
+  3 dict dup begin
+  /DWIDTH 42 def
+  /BBX [ 34 31 4 19 ] def
+  /BITMAP <
+000FF80000
+000FFC0000
+001FFC0000
+001FFE0000
+001FFE0000
+003FFE0000
+003FFF0000
+007FFF0000
+007FFF8000
+007FFF8000
+00FF7F8000
+00FF3FC000
+01FE3FC000
+01FE1FE000
+01FE1FE000
+03FC1FE000
+03FC0FF000
+07F80FF000
+07F807F800
+07F807F800
+0FF007F800
+0FF003FC00
+0FF003FC00
+1FE001FE00
+1FE001FE00
+3FC001FE00
+3FC000FF00
+3FC000FF00
+7F80007F80
+7F80007F80
+FF00007F80
+  > def
+    end
+  put % /asciicircum
+ Encoding 95 /underscore put
+ CharData /underscore
+  3 dict dup begin
+  /DWIDTH 40 def
+  /BBX [ 44 5 -2 -14 ] def
+  /BITMAP <
+FFFFFFFFFFF0
+FFFFFFFFFFF0
+FFFFFFFFFFF0
+FFFFFFFFFFF0
+FFFFFFFFFFF0
+  > def
+    end
+  put % /underscore
+ Encoding 96 /grave put
+ CharData /grave
+  3 dict dup begin
+  /DWIDTH 20 def
+  /BBX [ 10 18 5 34 ] def
+  /BITMAP <
+03C0
+0FC0
+1FC0
+3F00
+7C00
+7800
+7800
+F000
+F000
+F000
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+  > def
+    end
+  put % /grave
+ Encoding 97 /a put
+ CharData /a
+  3 dict dup begin
+  /DWIDTH 40 def
+  /BBX [ 36 41 2 -1 ] def
+  /BITMAP <
+000FFE0000
+007FFFC000
+01FFFFF000
+03FFFFF800
+07FFFFFC00
+0FFFFFFE00
+1FFFFFFF00
+1FFFFFFF00
+3FFC07FF00
+3FF003FF80
+7FF001FF80
+7FE001FF80
+7FE001FF80
+7FE001FF80
+000001FF80
+000003FF80
+00001FFF80
+0007FFFF80
+00FFFFFF80
+03FFFFFF80
+0FFFFFFF80
+1FFFFFFF80
+3FFFF9FF80
+3FFF01FF80
+7FF801FF80
+7FE001FF80
+FFE001FF80
+FFC001FF80
+FFC003FF80
+FFC003FF80
+FFC003FF80
+FFE007FF80
+FFF00FFF80
+FFFC7FFF80
+7FFFFFFF80
+7FFFFFFF80
+3FFFFFFFC0
+3FFFFDFFC0
+1FFFF9FFE0
+07FFE0FFF0
+03FF800000
+  > def
+    end
+  put % /a
+ Encoding 98 /b put
+ CharData /b
+  3 dict dup begin
+  /DWIDTH 44 def
+  /BBX [ 37 54 4 -2 ] def
+  /BITMAP <
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC07F8000
+FFC3FFE000
+FFC7FFF800
+FFCFFFFC00
+FFDFFFFE00
+FFFFFFFF00
+FFFFFFFF80
+FFFFFFFFC0
+FFFF07FFC0
+FFFE01FFE0
+FFFC00FFE0
+FFF8007FE0
+FFF0007FF0
+FFF0003FF0
+FFE0003FF0
+FFE0003FF0
+FFE0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFE0003FF0
+FFE0003FF0
+FFF0003FF0
+FFF0007FF0
+FFF800FFE0
+FFFC00FFE0
+FFFE03FFE0
+FFFF8FFFC0
+FFFFFFFF80
+FFFFFFFF80
+FFFFFFFF00
+FFDFFFFE00
+FFCFFFFC00
+FFC7FFF000
+0001FFE000
+00003E0000
+  > def
+    end
+  put % /b
+ Encoding 99 /c put
+ CharData /c
+  3 dict dup begin
+  /DWIDTH 40 def
+  /BBX [ 36 42 2 -2 ] def
+  /BITMAP <
+0003FE0000
+001FFFC000
+007FFFF000
+01FFFFFC00
+03FFFFFE00
+07FFFFFF00
+0FFFFFFF00
+0FFFFFFF80
+1FFF07FFC0
+1FFE01FFC0
+3FF800FFC0
+3FF800FFE0
+7FF0007FE0
+7FF0007FE0
+7FE0003FE0
+7FE0003FE0
+FFE0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFE0000000
+7FE0003FE0
+7FE0007FE0
+7FF0007FE0
+7FF000FFE0
+3FF800FFC0
+3FFE01FFC0
+1FFF8FFF80
+0FFFFFFF80
+0FFFFFFF00
+07FFFFFE00
+03FFFFFC00
+00FFFFF800
+007FFFF000
+001FFF8000
+0000F80000
+  > def
+    end
+  put % /c
+ Encoding 100 /d put
+ CharData /d
+  3 dict dup begin
+  /DWIDTH 44 def
+  /BBX [ 37 54 2 -2 ] def
+  /BITMAP <
+0000001FF8
+0000001FF8
+0000001FF8
+0000001FF8
+0000001FF8
+0000001FF8
+0000001FF8
+0000001FF8
+0000001FF8
+0000001FF8
+0000001FF8
+0000001FF8
+0007F81FF8
+003FFE1FF8
+007FFF9FF8
+01FFFFDFF8
+03FFFFDFF8
+07FFFFFFF8
+0FFFFFFFF8
+0FFFFFFFF8
+1FFF07FFF8
+1FFC01FFF8
+3FF800FFF8
+3FF800FFF8
+7FF0007FF8
+7FF0003FF8
+7FE0003FF8
+7FE0003FF8
+FFE0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+7FE0003FF8
+7FE0003FF8
+7FF0003FF8
+7FF0007FF8
+3FF800FFF8
+3FFC00FFF8
+3FFE03FFF8
+1FFF8FFFF8
+0FFFFFFFF8
+0FFFFFFFF8
+07FFFFFFF8
+03FFFFDFF8
+01FFFF9FF8
+007FFF1FF8
+001FFC0000
+0003E00000
+  > def
+    end
+  put % /d
+ Encoding 101 /e put
+ CharData /e
+  3 dict dup begin
+  /DWIDTH 40 def
+  /BBX [ 36 42 2 -2 ] def
+  /BITMAP <
+0007FC0000
+003FFF8000
+00FFFFE000
+01FFFFF000
+03FFFFF800
+07FFFFFC00
+0FFFFFFE00
+1FFFFFFF00
+1FFE0FFF80
+3FF803FF80
+3FF001FFC0
+7FE000FFC0
+7FE000FFC0
+7FC000FFE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFFFFFFFE0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFFFFFFFF0
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+7FE0007FE0
+7FE0007FE0
+7FF000FFC0
+3FF803FFC0
+3FFF0FFF80
+1FFFFFFF80
+0FFFFFFF00
+0FFFFFFE00
+07FFFFFC00
+01FFFFF000
+00FFFFE000
+003FFF0000
+0001F00000
+  > def
+    end
+  put % /e
+ Encoding 102 /f put
+ CharData /f
+  3 dict dup begin
+  /DWIDTH 24 def
+  /BBX [ 21 52 1 0 ] def
+  /BITMAP <
+001FF8
+00FFF8
+01FFF8
+03FFF8
+03FFF8
+07FFF8
+07FFF8
+07FFF0
+07FF00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+FFFFF8
+FFFFF8
+FFFFF8
+FFFFF8
+FFFFF8
+FFFFF8
+FFFFF8
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+  > def
+    end
+  put % /f
+ Encoding 103 /g put
+ CharData /g
+  3 dict dup begin
+  /DWIDTH 44 def
+  /BBX [ 37 55 2 -15 ] def
+  /BITMAP <
+0007F00000
+003FFC1FF8
+007FFF1FF8
+01FFFF9FF8
+03FFFFDFF8
+07FFFFFFF8
+07FFFFFFF8
+0FFFFFFFF8
+1FFF07FFF8
+1FFE01FFF8
+3FFC00FFF8
+3FF800FFF8
+7FF0007FF8
+7FF0003FF8
+7FE0003FF8
+7FE0003FF8
+FFE0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFE0003FF8
+7FE0003FF8
+7FF0003FF8
+7FF0007FF8
+7FF8007FF8
+3FFC00FFF8
+3FFE03FFF8
+1FFF8FFFF8
+1FFFFFFFF8
+0FFFFFFFF8
+07FFFFFFF8
+03FFFFDFF8
+01FFFF9FF8
+00FFFF1FF8
+003FFC1FF8
+0003E01FF8
+0000001FF8
+0000001FF8
+0000003FF8
+7FF0003FF0
+7FF8007FF0
+7FF800FFF0
+3FFE03FFE0
+1FFFFFFFC0
+0FFFFFFF80
+07FFFFFF00
+03FFFFFE00
+007FFFF000
+000FFF8000
+  > def
+    end
+  put % /g
+ Encoding 104 /h put
+ CharData /h
+  3 dict dup begin
+  /DWIDTH 44 def
+  /BBX [ 34 52 5 0 ] def
+  /BITMAP <
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC07F8000
+FFC1FFF000
+FFC7FFF800
+FFCFFFFE00
+FFDFFFFE00
+FFDFFFFF00
+FFFFFFFF80
+FFFFFFFF80
+FFFE0FFF80
+FFF803FFC0
+FFF003FFC0
+FFF001FFC0
+FFE001FFC0
+FFE000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+  > def
+    end
+  put % /h
+ Encoding 105 /i put
+ CharData /i
+  3 dict dup begin
+  /DWIDTH 20 def
+  /BBX [ 10 52 5 0 ] def
+  /BITMAP <
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+0000
+0000
+0000
+0000
+0000
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+  > def
+    end
+  put % /i
+ Encoding 106 /j put
+ CharData /j
+  3 dict dup begin
+  /DWIDTH 20 def
+  /BBX [ 15 67 0 -15 ] def
+  /BITMAP <
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+0000
+0000
+0000
+0000
+0000
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+07FE
+9FFE
+FFFE
+FFFE
+FFFE
+FFFC
+FFFC
+FFF8
+FFE0
+  > def
+    end
+  put % /j
+ Encoding 107 /k put
+ CharData /k
+  3 dict dup begin
+  /DWIDTH 40 def
+  /BBX [ 35 52 4 0 ] def
+  /BITMAP <
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC001FFC0
+FFC003FF80
+FFC007FF00
+FFC00FFE00
+FFC01FFE00
+FFC03FFC00
+FFC03FF800
+FFC07FF000
+FFC0FFE000
+FFC1FFC000
+FFC3FF8000
+FFC7FF0000
+FFCFFE0000
+FFCFFC0000
+FFDFFC0000
+FFFFFC0000
+FFFFFC0000
+FFFFFE0000
+FFFFFE0000
+FFFFFF0000
+FFFFFF8000
+FFFFFF8000
+FFFDFFC000
+FFF9FFC000
+FFF0FFE000
+FFE0FFE000
+FFC07FF000
+FFC07FF800
+FFC03FF800
+FFC03FFC00
+FFC01FFC00
+FFC00FFE00
+FFC00FFF00
+FFC007FF00
+FFC007FF80
+FFC003FF80
+FFC003FFC0
+FFC001FFE0
+FFC001FFE0
+  > def
+    end
+  put % /k
+ Encoding 108 /l put
+ CharData /l
+  3 dict dup begin
+  /DWIDTH 20 def
+  /BBX [ 10 52 5 0 ] def
+  /BITMAP <
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+FFC0
+  > def
+    end
+  put % /l
+ Encoding 109 /m put
+ CharData /m
+  3 dict dup begin
+  /DWIDTH 64 def
+  /BBX [ 54 40 5 0 ] def
+  /BITMAP <
+00007F0003FC00
+FFC1FFE01FFF00
+FFC7FFF03FFFC0
+FFCFFFF87FFFE0
+FFDFFFFCFFFFF0
+FFFFFFFFFFFFF0
+FFFFFFFFFFFFF8
+FFFFFFFFFFFFF8
+FFFC1FFFF87FFC
+FFF80FFFE03FFC
+FFF007FFC01FFC
+FFE007FF800FFC
+FFE003FF800FFC
+FFC003FF000FFC
+FFC003FF000FFC
+FFC003FF000FFC
+FFC003FF000FFC
+FFC003FF000FFC
+FFC003FF000FFC
+FFC003FF000FFC
+FFC003FF000FFC
+FFC003FF000FFC
+FFC003FF000FFC
+FFC003FF000FFC
+FFC003FF000FFC
+FFC003FF000FFC
+FFC003FF000FFC
+FFC003FF000FFC
+FFC003FF000FFC
+FFC003FF000FFC
+FFC003FF000FFC
+FFC003FF000FFC
+FFC003FF000FFC
+FFC003FF000FFC
+FFC003FF000FFC
+FFC003FF000FFC
+FFC003FF000FFC
+FFC003FF000FFC
+FFC003FF000FFC
+FFC003FF000FFC
+  > def
+    end
+  put % /m
+ Encoding 110 /n put
+ CharData /n
+  3 dict dup begin
+  /DWIDTH 44 def
+  /BBX [ 34 40 5 0 ] def
+  /BITMAP <
+00007F8000
+FFC1FFF000
+FFC7FFF800
+FFCFFFFC00
+FFDFFFFE00
+FFDFFFFF00
+FFFFFFFF80
+FFFFFFFF80
+FFFE0FFF80
+FFF803FFC0
+FFF001FFC0
+FFE001FFC0
+FFE001FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+  > def
+    end
+  put % /n
+ Encoding 111 /o put
+ CharData /o
+  3 dict dup begin
+  /DWIDTH 44 def
+  /BBX [ 38 42 3 -2 ] def
+  /BITMAP <
+0003FF0000
+001FFFE000
+007FFFF800
+01FFFFFC00
+03FFFFFF00
+07FFFFFF80
+0FFFFFFF80
+0FFFFFFFC0
+1FFF07FFE0
+3FFC01FFE0
+3FF800FFF0
+3FF0007FF0
+7FF0003FF8
+7FE0003FF8
+7FE0001FF8
+FFE0001FF8
+FFC0001FFC
+FFC0000FFC
+FFC0000FFC
+FFC0000FFC
+FFC0000FFC
+FFC0000FFC
+FFC0000FFC
+FFC0000FFC
+FFC0000FFC
+FFC0000FFC
+FFE0001FFC
+7FE0001FF8
+7FE0003FF8
+7FF0003FF8
+3FF8007FF0
+3FF800FFF0
+3FFE01FFE0
+1FFF8FFFE0
+0FFFFFFFC0
+0FFFFFFF80
+07FFFFFF00
+03FFFFFE00
+00FFFFFC00
+007FFFF000
+001FFFC000
+0000F80000
+  > def
+    end
+  put % /o
+ Encoding 112 /p put
+ CharData /p
+  3 dict dup begin
+  /DWIDTH 44 def
+  /BBX [ 37 55 4 -15 ] def
+  /BITMAP <
+00007F8000
+FFC1FFE000
+FFC7FFF800
+FFCFFFFC00
+FFDFFFFE00
+FFDFFFFF00
+FFFFFFFF80
+FFFFFFFFC0
+FFFF07FFC0
+FFFE01FFE0
+FFF800FFE0
+FFF8007FE0
+FFF0007FF0
+FFF0003FF0
+FFE0003FF0
+FFE0003FF0
+FFE0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFE0003FF8
+FFE0003FF0
+FFE0003FF0
+FFF0007FF0
+FFF8007FE0
+FFFC00FFE0
+FFFE01FFE0
+FFFF8FFFC0
+FFFFFFFF80
+FFFFFFFF80
+FFFFFFFF00
+FFDFFFFE00
+FFCFFFFC00
+FFC7FFF800
+FFC1FFE000
+FFC03F0000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+  > def
+    end
+  put % /p
+ Encoding 113 /q put
+ CharData /q
+  3 dict dup begin
+  /DWIDTH 44 def
+  /BBX [ 37 55 2 -15 ] def
+  /BITMAP <
+0007F00000
+003FFE1FF8
+00FFFF1FF8
+01FFFF9FF8
+03FFFFDFF8
+07FFFFFFF8
+0FFFFFFFF8
+0FFFFFFFF8
+1FFF07FFF8
+1FFC01FFF8
+3FF800FFF8
+3FF800FFF8
+7FF0007FF8
+7FF0003FF8
+7FE0003FF8
+7FE0003FF8
+FFE0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFC0001FF8
+FFE0003FF8
+7FE0003FF8
+7FE0003FF8
+7FF0007FF8
+3FF800FFF8
+3FF800FFF8
+3FFE03FFF8
+1FFF8FFFF8
+1FFFFFFFF8
+0FFFFFFFF8
+07FFFFDFF8
+03FFFF9FF8
+01FFFF9FF8
+00FFFE1FF8
+003FFC1FF8
+0003E01FF8
+0000001FF8
+0000001FF8
+0000001FF8
+0000001FF8
+0000001FF8
+0000001FF8
+0000001FF8
+0000001FF8
+0000001FF8
+0000001FF8
+0000001FF8
+0000001FF8
+0000001FF8
+  > def
+    end
+  put % /q
+ Encoding 114 /r put
+ CharData /r
+  3 dict dup begin
+  /DWIDTH 28 def
+  /BBX [ 22 40 5 0 ] def
+  /BITMAP <
+00007C
+FFC1FC
+FFC3FC
+FFC7FC
+FFCFFC
+FFDFFC
+FFDFFC
+FFFFFC
+FFFFFC
+FFFFFC
+FFFE0C
+FFF800
+FFF000
+FFE000
+FFE000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+FFC000
+  > def
+    end
+  put % /r
+ Encoding 115 /s put
+ CharData /s
+  3 dict dup begin
+  /DWIDTH 40 def
+  /BBX [ 35 42 2 -2 ] def
+  /BITMAP <
+000FFE0000
+007FFFC000
+01FFFFF000
+03FFFFF800
+07FFFFFC00
+0FFFFFFE00
+1FFFFFFF00
+3FFFFFFF00
+3FFC07FF80
+3FF001FF80
+7FE000FFC0
+7FE000FFC0
+7FE000FFC0
+7FF0007FC0
+7FF8000000
+7FFF800000
+7FFFF00000
+3FFFFE0000
+3FFFFFE000
+1FFFFFF800
+0FFFFFFE00
+07FFFFFF00
+00FFFFFF80
+001FFFFFC0
+0003FFFFC0
+00003FFFE0
+000007FFE0
+000000FFE0
+0000007FE0
+FFC0007FE0
+FFC0007FE0
+FFE0007FE0
+7FF001FFC0
+7FFE0FFFC0
+3FFFFFFF80
+3FFFFFFF80
+1FFFFFFF00
+0FFFFFFE00
+07FFFFFC00
+01FFFFF000
+007FFFC000
+0001FC0000
+  > def
+    end
+  put % /s
+ Encoding 116 /t put
+ CharData /t
+  3 dict dup begin
+  /DWIDTH 24 def
+  /BBX [ 21 50 1 -2 ] def
+  /BITMAP <
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+FFFFF8
+FFFFF8
+FFFFF8
+FFFFF8
+FFFFF8
+FFFFF8
+FFFFF8
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FE00
+07FF80
+07FFF8
+07FFF8
+03FFF8
+03FFF8
+01FFF8
+00FFF8
+007FF8
+000FC0
+  > def
+    end
+  put % /t
+ Encoding 117 /u put
+ CharData /u
+  3 dict dup begin
+  /DWIDTH 44 def
+  /BBX [ 35 40 4 -1 ] def
+  /BITMAP <
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC0007FE0
+FFC000FFE0
+FFE000FFE0
+FFE001FFE0
+FFF003FFE0
+FFF807FFE0
+7FFE3FFFE0
+7FFFFFFFE0
+3FFFFFFFE0
+3FFFFF7FE0
+1FFFFE7FE0
+0FFFFC7FE0
+07FFF87FE0
+01FFE00000
+  > def
+    end
+  put % /u
+ Encoding 118 /v put
+ CharData /v
+  3 dict dup begin
+  /DWIDTH 40 def
+  /BBX [ 38 39 1 0 ] def
+  /BITMAP <
+FFE0001FF8
+7FE0003FF8
+7FE0003FF8
+7FF0003FF0
+3FF0003FF0
+3FF0007FF0
+3FF8007FE0
+1FF8007FE0
+1FF8007FC0
+1FF800FFC0
+0FFC00FFC0
+0FFC00FF80
+0FFC01FF80
+07FE01FF80
+07FE01FF00
+07FE01FF00
+03FE03FF00
+03FF03FE00
+03FF03FE00
+01FF03FE00
+01FF87FC00
+01FF87FC00
+00FF87FC00
+00FFCFF800
+007FCFF800
+007FCFF800
+007FCFF000
+003FFFF000
+003FFFF000
+003FFFE000
+001FFFE000
+001FFFE000
+001FFFC000
+000FFFC000
+000FFFC000
+000FFF8000
+0007FF8000
+0007FF8000
+0007FF0000
+  > def
+    end
+  put % /v
+ Encoding 119 /w put
+ CharData /w
+  3 dict dup begin
+  /DWIDTH 56 def
+  /BBX [ 55 39 0 0 ] def
+  /BITMAP <
+7FE001FF8007FE
+7FE001FF800FFE
+7FE003FF800FFC
+7FF003FFC00FFC
+3FF003FFC00FFC
+3FF003FFC01FF8
+3FF007FFC01FF8
+3FF007FFE01FF8
+1FF807FFE01FF8
+1FF807FFE01FF0
+1FF807FFE03FF0
+0FF80FFFE03FF0
+0FFC0FFFF03FE0
+0FFC0FEFF03FE0
+0FFC0FEFF03FE0
+07FC0FE7F07FE0
+07FE1FE7F07FC0
+07FE1FC7F87FC0
+03FE1FC7F87FC0
+03FE1FC7F8FF80
+03FE3FC3F8FF80
+03FF3FC3F8FF80
+01FF3F83FCFF80
+01FF3F83FCFF00
+01FF3F81FDFF00
+00FFFF81FDFF00
+00FFFF01FFFF00
+00FFFF01FFFE00
+00FFFF01FFFE00
+007FFF00FFFE00
+007FFF00FFFC00
+007FFE00FFFC00
+007FFE00FFFC00
+003FFE00FFFC00
+003FFE007FF800
+003FFC007FF800
+001FFC007FF800
+001FFC007FF000
+001FFC003FF000
+  > def
+    end
+  put % /w
+ Encoding 120 /x put
+ CharData /x
+  3 dict dup begin
+  /DWIDTH 40 def
+  /BBX [ 37 39 1 0 ] def
+  /BITMAP <
+7FF8007FF8
+7FF800FFF0
+3FFC00FFE0
+1FFC01FFE0
+1FFE01FFC0
+0FFE03FF80
+07FF03FF80
+07FF07FF00
+03FF87FE00
+01FFCFFE00
+01FFCFFC00
+00FFFFFC00
+007FFFF800
+007FFFF000
+003FFFF000
+001FFFE000
+001FFFC000
+000FFFC000
+000FFF8000
+0007FF8000
+000FFF8000
+000FFFC000
+001FFFE000
+003FFFE000
+003FFFF000
+007FFFF800
+007FFFF800
+00FFFFFC00
+01FFCFFE00
+01FF8FFE00
+03FF87FF00
+07FF07FF00
+07FF03FF80
+0FFE03FFC0
+1FFE01FFC0
+1FFC01FFE0
+3FFC00FFF0
+7FF8007FF0
+7FF0007FF8
+  > def
+    end
+  put % /x
+ Encoding 121 /y put
+ CharData /y
+  3 dict dup begin
+  /DWIDTH 40 def
+  /BBX [ 38 55 1 -16 ] def
+  /BITMAP <
+FFE0001FF8
+FFE0001FF8
+7FE0001FF8
+7FF0003FF0
+7FF0003FF0
+3FF0003FF0
+3FF8007FE0
+3FF8007FE0
+1FF8007FE0
+1FFC007FC0
+1FFC00FFC0
+0FFC00FFC0
+0FFC00FF80
+0FFE01FF80
+07FE01FF80
+07FE01FF00
+03FF01FF00
+03FF03FF00
+03FF03FE00
+01FF83FE00
+01FF83FC00
+01FF87FC00
+00FF87FC00
+00FFC7F800
+00FFCFF800
+007FCFF800
+007FEFF000
+007FEFF000
+003FFFF000
+003FFFE000
+001FFFE000
+001FFFE000
+001FFFC000
+000FFFC000
+000FFFC000
+000FFF8000
+0007FF8000
+0007FF8000
+0007FF0000
+0003FF0000
+0003FF0000
+0003FE0000
+0003FE0000
+0003FE0000
+0007FC0000
+0007FC0000
+000FFC0000
+063FF80000
+07FFF80000
+07FFF00000
+07FFF00000
+07FFE00000
+07FFC00000
+07FF800000
+07FC000000
+  > def
+    end
+  put % /y
+ Encoding 122 /z put
+ CharData /z
+  3 dict dup begin
+  /DWIDTH 36 def
+  /BBX [ 32 39 2 0 ] def
+  /BITMAP <
+7FFFFFFE
+7FFFFFFE
+7FFFFFFE
+7FFFFFFE
+7FFFFFFE
+7FFFFFFE
+7FFFFFFE
+7FFFFFFE
+00003FFE
+00007FFC
+00007FF8
+0000FFF0
+0001FFE0
+0003FFC0
+0007FFC0
+000FFF80
+000FFF00
+001FFE00
+003FFC00
+007FF800
+00FFF800
+01FFF000
+01FFE000
+03FFC000
+07FF8000
+0FFF0000
+1FFF0000
+3FFE0000
+3FFC0000
+7FF80000
+FFF00000
+FFFFFFFF
+FFFFFFFF
+FFFFFFFF
+FFFFFFFF
+FFFFFFFF
+FFFFFFFF
+FFFFFFFF
+FFFFFFFF
+  > def
+    end
+  put % /z
+ Encoding 123 /braceleft put
+ CharData /braceleft
+  3 dict dup begin
+  /DWIDTH 28 def
+  /BBX [ 20 66 3 -14 ] def
+  /BITMAP <
+001FF0
+007FF0
+00FFF0
+00FFF0
+01FFF0
+01FFF0
+03FFF0
+03FE00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+07FC00
+0FFC00
+FFF800
+FFF000
+FFE000
+FF0000
+FFC000
+FFF000
+FFF800
+1FF800
+07FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FE00
+03FFF0
+01FFF0
+01FFF0
+00FFF0
+00FFF0
+007FF0
+001FF0
+  > def
+    end
+  put % /braceleft
+ Encoding 124 /bar put
+ CharData /bar
+  3 dict dup begin
+  /DWIDTH 20 def
+  /BBX [ 6 66 7 -14 ] def
+  /BITMAP <
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+FC
+  > def
+    end
+  put % /bar
+ Encoding 125 /braceright put
+ CharData /braceright
+  3 dict dup begin
+  /DWIDTH 28 def
+  /BBX [ 20 66 5 -14 ] def
+  /BITMAP <
+FF8000
+FFE000
+FFF000
+FFF000
+FFF800
+FFF800
+FFFC00
+07FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FE00
+01FF80
+01FFF0
+00FFF0
+003FF0
+000FF0
+007FF0
+00FFF0
+01FFF0
+03FF00
+03FE00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+03FC00
+07FC00
+FFFC00
+FFF800
+FFF800
+FFF000
+FFF000
+FFE000
+FF8000
+  > def
+    end
+  put % /braceright
+ Encoding 126 /asciitilde put
+ CharData /asciitilde
+  3 dict dup begin
+  /DWIDTH 42 def
+  /BBX [ 33 13 4 10 ] def
+  /BITMAP <
+03F8000000
+0FFE000000
+1FFF000F80
+3FFFC00F80
+3FFFE01F80
+7FFFF01F80
+7F0FFC3F80
+7E07FFFF00
+7C01FFFF00
+FC00FFFE00
+FC007FFC00
+00001FF800
+000007E000
+  > def
+    end
+  put % /asciitilde
+ Encoding 128 /sigma put
+ CharData /sigma
+  3 dict dup begin
+  /DWIDTH 43 def
+  /BBX [ 41 37 2 -1 ] def
+  /BITMAP <
+00007FFFFF80
+0007FFFFFF80
+003FFFFFFF80
+00FFFFFFFF80
+01FFFFFFFF80
+03FFFFFFFF80
+07FF03C00000
+0FFC01F00000
+1FF801F80000
+3FF000FC0000
+3FE0007E0000
+7FC0003F0000
+7FC0003F8000
+7FC0001FC000
+FF80001FE000
+FF80001FE000
+FF80000FF000
+FF80000FF000
+FF80000FF800
+FF80000FF800
+FF80000FF800
+FF80000FF800
+7FC0000FF800
+7FC0000FF800
+7FC0000FF800
+3FC0000FF000
+3FE0001FF000
+1FE0001FF000
+1FF0001FE000
+0FF8003FC000
+07F8003FC000
+03FE007F8000
+01FF00FF0000
+00FFC3FE0000
+007FFFF80000
+001FFFE00000
+0003FF000000
+  > def
+    end
+  put % /sigma
+ Encoding 129 /tau put
+ CharData /tau
+  3 dict dup begin
+  /DWIDTH 32 def
+  /BBX [ 31 37 1 -1 ] def
+  /BITMAP <
+007FFFFE
+01FFFFFE
+07FFFFFE
+0FFFFFFE
+0FFFFFFE
+1FFFFFFE
+3FFFFFFE
+3F07E000
+7C07E000
+7C07E000
+7807E000
+F807E000
+F007E000
+F007E000
+0007E000
+0007E000
+000FE000
+000FC000
+000FC000
+000FC000
+000FC000
+000FC000
+000FC000
+000FC000
+000FC038
+000FC078
+000FE078
+000FE078
+000FF0F8
+000FFDF8
+0007FFF8
+0007FFF0
+0007FFF0
+0003FFE0
+0003FFC0
+0001FF80
+00007F00
+  > def
+    end
+  put % /tau
+ Encoding 130 /superminus put
+ CharData /superminus
+  3 dict dup begin
+  /DWIDTH 28 def
+  /BBX [ 24 6 2 25 ] def
+  /BITMAP <
+FFFFFF
+FFFFFF
+FFFFFF
+FFFFFF
+FFFFFF
+FFFFFF
+  > def
+    end
+  put % /superminus
+ Encoding 131 /super0 put
+ CharData /super0
+  3 dict dup begin
+  /DWIDTH 27 def
+  /BBX [ 24 36 1 16 ] def
+  /BITMAP <
+00FF00
+03FFC0
+07FFE0
+0FFFF0
+1FFFF8
+3FFFFC
+3FC1FC
+7F80FE
+7F00FE
+7F00FE
+7F007E
+FE007F
+FE007F
+FE007F
+FE007F
+FE007F
+FE007F
+FE007F
+FE007F
+FE007F
+FE007F
+FE007F
+FE007F
+FE007F
+FE007F
+7F007E
+7F00FE
+7F00FE
+7F80FE
+3FC3FC
+3FFFFC
+1FFFF8
+0FFFF0
+07FFE0
+03FFC0
+00FF00
+  > def
+    end
+  put % /super0
+ Encoding 132 /super1 put
+ CharData /super1
+  3 dict dup begin
+  /DWIDTH 27 def
+  /BBX [ 15 34 3 17 ] def
+  /BITMAP <
+003E
+003E
+007E
+00FE
+01FE
+0FFE
+FFFE
+FFFE
+FFFE
+FFFE
+00FE
+00FE
+00FE
+00FE
+00FE
+00FE
+00FE
+00FE
+00FE
+00FE
+00FE
+00FE
+00FE
+00FE
+00FE
+00FE
+00FE
+00FE
+00FE
+00FE
+00FE
+00FE
+00FE
+00FE
+  > def
+    end
+  put % /super1
+ Encoding 133 /super2 put
+ CharData /super2
+  3 dict dup begin
+  /DWIDTH 27 def
+  /BBX [ 24 35 1 17 ] def
+  /BITMAP <
+00FF00
+03FFE0
+0FFFF0
+1FFFF8
+1FFFFC
+3FFFFE
+3FC1FE
+7F80FF
+7F007F
+7F007F
+7F007F
+7F007F
+7F007F
+00007F
+0000FE
+0000FE
+0001FE
+0003FC
+0007F8
+001FF0
+003FE0
+007FC0
+01FF00
+03FE00
+07F800
+0FF000
+1FE000
+3FC000
+3FC000
+7FFFFF
+7FFFFF
+7FFFFF
+7FFFFF
+7FFFFF
+FFFFFF
+  > def
+    end
+  put % /super2
+ Encoding 134 /super3 put
+ CharData /super3
+  3 dict dup begin
+  /DWIDTH 27 def
+  /BBX [ 24 36 1 16 ] def
+  /BITMAP <
+00FF00
+03FFC0
+0FFFF0
+1FFFF8
+3FFFFC
+3FFFFC
+7F83FE
+7F01FE
+7E00FE
+7E00FE
+7E00FE
+7E00FE
+0000FC
+0001FC
+0003F8
+007FF0
+007FE0
+007FF0
+007FF8
+007FFC
+0003FE
+0000FE
+0000FF
+00007F
+00007F
+FE007F
+FE007F
+7E007F
+7F00FF
+7F81FE
+3FFFFE
+3FFFFC
+1FFFF8
+0FFFF0
+07FFE0
+00FF00
+  > def
+    end
+  put % /super3
+ Encoding 135 /super4 put
+ CharData /super4
+  3 dict dup begin
+  /DWIDTH 27 def
+  /BBX [ 24 34 1 17 ] def
+  /BITMAP <
+000FF8
+000FF8
+001FF8
+003FF8
+003FF8
+007FF8
+007FF8
+00FBF8
+01FBF8
+01F3F8
+03F3F8
+03E3F8
+07C3F8
+0FC3F8
+0F83F8
+1F03F8
+1F03F8
+3E03F8
+7E03F8
+7C03F8
+F803F8
+FFFFFF
+FFFFFF
+FFFFFF
+FFFFFF
+FFFFFF
+FFFFFF
+0003F8
+0003F8
+0003F8
+0003F8
+0003F8
+0003F8
+0003F8
+  > def
+    end
+  put % /super4
+ Encoding 136 /super5 put
+ CharData /super5
+  3 dict dup begin
+  /DWIDTH 27 def
+  /BBX [ 24 36 1 16 ] def
+  /BITMAP <
+0FFFFE
+0FFFFE
+0FFFFE
+0FFFFE
+0FFFFE
+1FFFFE
+1F0000
+1F0000
+1F0000
+1F0000
+1F0000
+1F0000
+3F3F80
+3EFFE0
+3FFFF0
+3FFFF8
+3FFFFC
+3FFFFE
+7F83FE
+7F00FE
+0000FF
+00007F
+00007F
+00007F
+00007F
+00007F
+FE007F
+FE00FF
+7F00FE
+7F83FE
+7FFFFC
+3FFFFC
+1FFFF8
+0FFFF0
+07FFC0
+01FF00
+  > def
+    end
+  put % /super5
+ Encoding 137 /super6 put
+ CharData /super6
+  3 dict dup begin
+  /DWIDTH 27 def
+  /BBX [ 24 36 1 16 ] def
+  /BITMAP <
+007F80
+01FFE0
+07FFF8
+0FFFFC
+1FFFFC
+1FFFFE
+3FC0FE
+3F807E
+7F007E
+7F0000
+7F0000
+7F0000
+FE1F80
+FE7FE0
+FEFFF0
+FFFFF8
+FFFFFC
+FFFFFE
+FFC1FE
+FF80FE
+FF00FF
+FE007F
+FE007F
+FE007F
+FE007F
+FE007F
+7E007F
+7F00FF
+7F80FE
+3FC1FE
+3FFFFC
+1FFFFC
+0FFFF8
+07FFF0
+03FFE0
+007F00
+  > def
+    end
+  put % /super6
+ Encoding 138 /super7 put
+ CharData /super7
+  3 dict dup begin
+  /DWIDTH 27 def
+  /BBX [ 24 35 1 17 ] def
+  /BITMAP <
+FFFFFF
+FFFFFF
+FFFFFF
+FFFFFF
+FFFFFF
+FFFFFF
+00007E
+0000FE
+0001FC
+0001F8
+0003F8
+0007F0
+0007E0
+000FE0
+000FC0
+001FC0
+003F80
+003F80
+003F00
+007F00
+007E00
+00FE00
+00FE00
+00FC00
+01FC00
+01FC00
+01F800
+01F800
+03F800
+03F800
+03F800
+03F800
+03F000
+03F000
+07F000
+  > def
+    end
+  put % /super7
+ Encoding 139 /super8 put
+ CharData /super8
+  3 dict dup begin
+  /DWIDTH 27 def
+  /BBX [ 24 36 1 16 ] def
+  /BITMAP <
+00FF00
+03FFE0
+0FFFF0
+1FFFF8
+1FFFFC
+3FFFFE
+7FC1FE
+7F80FF
+7F007F
+7F007F
+7F007F
+7F007F
+3F80FE
+3FC1FE
+1FFFFC
+0FFFE0
+07FFE0
+0FFFF8
+3FFFFC
+3FC3FC
+7F00FE
+7F00FE
+FE007F
+FE007F
+FE007F
+FE007F
+FE007F
+FF007F
+FF00FF
+7F81FE
+7FFFFE
+3FFFFC
+1FFFF8
+0FFFF0
+07FFE0
+00FF00
+  > def
+    end
+  put % /super8
+ Encoding 140 /super9 put
+ CharData /super9
+  3 dict dup begin
+  /DWIDTH 27 def
+  /BBX [ 24 36 1 16 ] def
+  /BITMAP <
+00FE00
+03FFC0
+0FFFE0
+1FFFF0
+3FFFF8
+3FFFF8
+7F83FC
+7F00FC
+FF00FE
+FE007E
+FE007E
+FE007E
+FE007F
+FE007F
+FE007F
+FF00FF
+7F00FF
+7FC3FF
+7FFFFF
+3FFFFF
+1FFFFF
+0FFF7F
+07FE7F
+01F87E
+00007E
+00007E
+0000FE
+7E00FC
+7F01FC
+7F83FC
+7FFFF8
+3FFFF8
+1FFFF0
+0FFFE0
+07FFC0
+01FE00
+  > def
+    end
+  put % /super9
+ Encoding 141 /suby put
+ CharData /suby
+  3 dict dup begin
+  /DWIDTH 25 def
+  /BBX [ 25 37 3 -16 ] def
+  /BITMAP <
+FE003F80
+FE003F00
+FF007F00
+7F007F00
+7F007E00
+7F80FE00
+3F80FE00
+3F80FC00
+3F80FC00
+1FC1FC00
+1FC1F800
+0FC1F800
+0FE3F800
+0FE3F000
+07E3F000
+07F3F000
+07F7E000
+03F7E000
+03F7C000
+03FFC000
+01FFC000
+01FF8000
+01FF8000
+00FF8000
+00FF0000
+007F0000
+007F0000
+007F0000
+007F0000
+00FE0000
+01FC0000
+1FFC0000
+1FFC0000
+1FF80000
+1FF00000
+1FF00000
+1F800000
+  > def
+    end
+  put % /suby
+ Encoding 142 /subp put
+ CharData /subp
+  3 dict dup begin
+  /DWIDTH 25 def
+  /BBX [ 25 38 2 -16 ] def
+  /BITMAP <
+FE1F8000
+FE7FE000
+FEFFF800
+FFFFFC00
+FFFFFC00
+FFFFFE00
+FFC3FE00
+FF80FF00
+FF00FF00
+FF007F00
+FE007F80
+FE003F80
+FE003F80
+FE003F80
+FE003F80
+FE003F80
+FE003F80
+FE003F80
+FF007F80
+FF007F00
+FF80FF00
+FFC1FE00
+FFFFFE00
+FFFFFC00
+FEFFF800
+FEFFF000
+FE7FE000
+FE1F8000
+FE000000
+FE000000
+FE000000
+FE000000
+FE000000
+FE000000
+FE000000
+FE000000
+FE000000
+FE000000
+  > def
+    end
+  put % /subp
+ Encoding 143 /sub0 put
+ CharData /sub0
+  3 dict dup begin
+  /DWIDTH 24 def
+  /BBX [ 24 36 2 -16 ] def
+  /BITMAP <
+00FF00
+03FFC0
+07FFE0
+0FFFF0
+1FFFF8
+3FFFFC
+3FC1FC
+7F80FE
+7F00FE
+7F00FE
+7F007E
+FE007F
+FE007F
+FE007F
+FE007F
+FE007F
+FE007F
+FE007F
+FE007F
+FE007F
+FE007F
+FE007F
+FE007F
+FE007F
+FE007F
+7F007E
+7F00FE
+7F00FE
+7F80FE
+3FC3FC
+3FFFFC
+1FFFF8
+0FFFF0
+07FFE0
+03FFC0
+00FF00
+  > def
+    end
+  put % /sub0
+ Encoding 144 /delta put
+ CharData /delta
+  3 dict dup begin
+  /DWIDTH 42 def
+  /BBX [ 44 49 3 0 ] def
+  /BITMAP <
+000003800000
+000003800000
+000007C00000
+000007C00000
+00000FC00000
+00000FE00000
+00001FE00000
+00001FF00000
+00003FF00000
+00003FF00000
+00003FF80000
+00007FF80000
+00007FFC0000
+0000FFFC0000
+0000FFFC0000
+0001F7FE0000
+0001F3FE0000
+0003E3FF0000
+0003E3FF0000
+0007E1FF8000
+0007C1FF8000
+000FC0FF8000
+000F80FFC000
+001F80FFC000
+001F007FE000
+003F007FE000
+003E003FE000
+003E003FF000
+007C003FF000
+007C001FF800
+00F8001FF800
+00F8000FF800
+01F0000FFC00
+01F00007FC00
+03F00007FE00
+03E00007FE00
+07E00003FF00
+07C00003FF00
+0FC00001FF00
+0F800001FF80
+1F800001FF80
+1F000000FFC0
+3F000000FFC0
+3E0000007FC0
+3E0000007FE0
+7FFFFFFFFFE0
+7FFFFFFFFFF0
+FFFFFFFFFFF0
+FFFFFFFFFFF0
+  > def
+    end
+  put % /delta
+ Encoding 145 /phi_upper put
+ CharData /phi_upper
+  3 dict dup begin
+  /DWIDTH 51 def
+  /BBX [ 52 48 2 0 ] def
+  /BITMAP <
+0001FFFFF80000
+0001FFFFF80000
+00000FFF800000
+000007FE000000
+000007FE000000
+000003FC000000
+000003FC000000
+000003FC000000
+000003FC000000
+0007FFFFFE0000
+003FFFFFFFC000
+00FFF3FCFFF000
+03FF03FC0FFC00
+07FC03FC03FE00
+0FF803FC01FF00
+1FF003FC00FF80
+3FE003FC007FC0
+3FC003FC003FC0
+7FC003FC003FE0
+7F8003FC003FE0
+FF8003FC001FF0
+FF8003FC001FF0
+FF8003FC001FF0
+FF8003FC001FF0
+FF8003FC001FF0
+FF8003FC001FF0
+FF8003FC001FF0
+7F8003FC001FE0
+7FC003FC003FE0
+7FC003FC003FE0
+3FE003FC007FC0
+1FE003FC007F80
+1FF003FC00FF80
+0FFC03FC03FF00
+03FF03FC0FFC00
+01FFE3FC7FF800
+007FFFFFFFE000
+000FFFFFFF0000
+00007FFFE00000
+000003FC000000
+000003FC000000
+000003FC000000
+000003FC000000
+000007FE000000
+00000FFF000000
+00001FFF800000
+0001FFFFF80000
+0001FFFFF80000
+  > def
+    end
+  put % /phi_upper
+ Encoding 146 /phi_lower put
+ CharData /phi_lower
+  3 dict dup begin
+  /DWIDTH 33 def
+  /BBX [ 34 65 7 -15 ] def
+  /BITMAP <
+0001C00000
+0001E00000
+0001E00000
+0001E00000
+0001E00000
+0001E00000
+0001E00000
+0001E00000
+0001E00000
+0001E00000
+0001E00000
+0001E00000
+0001E00000
+001FFF0000
+007FFFC000
+00FDFFE000
+03F1EFF800
+07E1E7FC00
+0FC1E3FC00
+0FC1E1FE00
+1F81E1FF00
+3F81E0FF00
+3F81E0FF80
+3F01E07F80
+7F01E07F80
+7F01E07FC0
+7F01E07FC0
+FF01E03FC0
+FF01E03FC0
+FF01E03FC0
+FF01E03FC0
+FF01E03FC0
+FF01E03FC0
+FF01E03FC0
+FF01E03FC0
+FF81E03F80
+7F81E03F80
+7F81E03F80
+7F81E03F00
+7FC1E07F00
+3FC1E07F00
+3FE1E07E00
+1FE1E0FC00
+0FF1E0FC00
+0FF9E1F800
+07FDE3F000
+01FFEFC000
+00FFFF8000
+003FFE0000
+0003E00000
+0001E00000
+0001E00000
+0001E00000
+0001E00000
+0001E00000
+0001E00000
+0001E00000
+0001E00000
+0001E00000
+0001E00000
+0001E00000
+0001E00000
+0001E00000
+0001E00000
+0001E00000
+  > def
+    end
+  put % /phi_lower
+ Encoding 147 /scriptL put
+ CharData /scriptL
+  3 dict dup begin
+  /DWIDTH 55 def
+  /BBX [ 52 53 3 -1 ] def
+  /BITMAP <
+000000001FE000
+00000000FFFC00
+00000001FFFE00
+00000003FFFF00
+00000007FFFF00
+00000007FFFF80
+0000000FF03F80
+0000000FE01F80
+007C001FE01F80
+00FE003FC01F80
+00FF003F803F80
+00FF803F80FF00
+00FFC07F83FE00
+00FFE07F8FFC00
+00FFF87FFFF800
+007FFFFFFFF000
+001FFFFFFFE000
+0007FFFFFF8000
+0000FFFFFE0000
+00001FFFF00000
+000001FF000000
+000001FE000000
+000001FE000000
+000003FC000000
+000003FC000000
+000007FC000000
+000007FC000000
+000007F8000000
+00000FF8000000
+00000FF0000000
+00000FF0000000
+00000FF0000000
+00001FE0000000
+01FE1FE0000000
+07FFFFC0000000
+0FFFFFC0000000
+1FFFFFC0000000
+3FFFFFC0000000
+3F83FF80000000
+7F01FF80000000
+FE00FFC0000000
+FE00FFF0000000
+FE00FFFC0001E0
+FE00FFFF0003F0
+FE01FFFF8007F0
+FF03FFFFF00FF0
+7FC7FFFFFFFFF0
+3FFFFFFFFFFFF0
+3FFFFCFFFFFFF0
+1FFFF83FFFFFE0
+0FFFF00FFFFFC0
+03FFE003FFFF80
+003F00003FFF00
+  > def
+    end
+  put % /scriptL
+ Encoding 148 /infinity put
+ CharData /infinity
+  3 dict dup begin
+  /DWIDTH 67 def
+  /BBX [ 65 37 2 -1 ] def
+  /BITMAP <
+000FF0000007F80000
+007FFC00001FFF0000
+00FFFF00007FFF8000
+03FFFFC001FFFFE000
+07FFFFE003FFFFF000
+07FFFFF007FFFFF000
+0FFFFFF80FFFFFF800
+1FFFFFFC1FFFFFFC00
+1FFFFFFE3FFFFFFC00
+3FFFFFFF7FFFFFFE00
+3FFFFFFFFFFFFFFE00
+7FF81FFFFFFC0FFF00
+7FE007FFFFF003FF00
+7FC001FFFFC001FF00
+7FC0007FFF0001FF00
+7F80003FFE0000FF00
+FF80003FFE0000FF80
+FF80001FFC0000FF80
+FF80001FFC0000FF80
+FF80001FFC0000FF80
+FF80003FFE0000FF80
+7F80007FFF0000FF00
+7FC000FFFF8001FF00
+7FC001FFFFC001FF00
+7FE007FFFFF003FF00
+7FF83FFFFFFE0FFF00
+3FFFFFFFFFFFFFFE00
+3FFFFFFF7FFFFFFE00
+1FFFFFFE3FFFFFFC00
+1FFFFFFC1FFFFFFC00
+0FFFFFF80FFFFFF800
+07FFFFF007FFFFF000
+07FFFFE003FFFFF000
+03FFFFC001FFFFE000
+00FFFF00007FFF8000
+007FFC00001FFF0000
+000FF0000007F80000
+  > def
+    end
+  put % /infinity
+ Encoding 177 /plusminus put
+ CharData /plusminus
+  3 dict dup begin
+  /DWIDTH 55 def
+  /BBX [ 34 45 5 -1 ] def
+  /BITMAP <
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+FFFFFFFFC0
+FFFFFFFFC0
+FFFFFFFFC0
+FFFFFFFFC0
+FFFFFFFFC0
+FFFFFFFFC0
+FFFFFFFFC0
+FFFFFFFFC0
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+000FF80000
+0000000000
+0000000000
+0000000000
+FFFFFFFFC0
+FFFFFFFFC0
+FFFFFFFFC0
+FFFFFFFFC0
+FFFFFFFFC0
+FFFFFFFFC0
+FFFFFFFFC0
+FFFFFFFFC0
+  > def
+    end
+  put % /plusminus
+ Encoding 181 /mu put
+ CharData /mu
+  3 dict dup begin
+  /DWIDTH 44 def
+  /BBX [ 37 55 4 -16 ] def
+  /BITMAP <
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC000FFC0
+FFC001FFC0
+FFE001FFC0
+FFE003FFC0
+FFF007FFC0
+FFF80FFFC0
+FFFE3FFFC0
+FFFFFFFFE8
+FFFFFFFFF8
+FFFFFFFFF8
+FFFFFFFFF8
+FFFFFFBFF8
+FFDFFF1FF8
+FFCFFC0FF8
+FFC1E001C0
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+FFC0000000
+  > def
+    end
+  put % /mu
+ Encoding 182 /paragraph put
+ CharData /paragraph
+  3 dict dup begin
+  /DWIDTH 40 def
+  /BBX [ 37 66 1 -14 ] def
+  /BITMAP <
+001FFFFFF8
+00FFFFFFF8
+01FFFFFFF8
+03FFFFFFF8
+07FFFFFFF8
+0FFFFC1FC0
+1FFFFC1FC0
+1FFFFC1FC0
+3FFFFC1FC0
+3FFFFC1FC0
+7FFFFC1FC0
+7FFFFC1FC0
+7FFFFC1FC0
+7FFFFC1FC0
+7FFFFC1FC0
+FFFFFC1FC0
+FFFFFC1FC0
+FFFFFC1FC0
+7FFFFC1FC0
+7FFFFC1FC0
+7FFFFC1FC0
+7FFFFC1FC0
+7FFFFC1FC0
+3FFFFC1FC0
+3FFFFC1FC0
+1FFFFC1FC0
+1FFFFC1FC0
+0FFFFC1FC0
+07FFFC1FC0
+03FFFC1FC0
+01FFFC1FC0
+007FFC1FC0
+0007FC1FC0
+0001FC1FC0
+0001FC1FC0
+0001FC1FC0
+0001FC1FC0
+0001FC1FC0
+0001FC1FC0
+0001FC1FC0
+0001FC1FC0
+0001FC1FC0
+0001FC1FC0
+0001FC1FC0
+0001FC1FC0
+0001FC1FC0
+0001FC1FC0
+0001FC1FC0
+0001FC1FC0
+0001FC1FC0
+0001FC1FC0
+0001FC1FC0
+0001FC1FC0
+0001FC1FC0
+0001FC1FC0
+0001FC1FC0
+0001FC1FC0
+0001FC1FC0
+0001FC1FC0
+0001FC1FC0
+0001FC1FC0
+0001FC1FC0
+0001FC1FC0
+0001FC1FC0
+0001FC1FC0
+0001FC1FC0
+  > def
+    end
+  put % /paragraph
+/FontMatrix [ 1 70 div 0 0 1 71 div 0 0 ] def
+/FontBBox [ 0 0 70 71 ] def
+/BuildChar { % stack has font char_index
+  20 dict begin % temporary dict for working
+  /ThisCharIndex exch def
+  /ThisFont exch def
+  ThisFont /Encoding get ThisCharIndex get % puts glyph name on stack
+  /ThisCharName exch def
+  ThisFont /CharData get ThisCharName get /ThisData exch def
+  ThisData /DWIDTH get /ThisDwidth exch def
+  ThisData /BBX get /ThisBbx exch def
+  ThisData /BITMAP get /ThisBitmap exch def
+  ThisDwidth 0  % relative move to next glyph
+    0 0 % llx lly
+    70 71 % urx ury
+    setcachedevice
+  2 ThisBbx 2 get add 16 ThisBbx 3 get add translate
+  ThisBbx 0 get ThisBbx 1 get scale
+  ThisBbx 0 get ThisBbx 1 get % width height
+    true % paint the 1 bits
+    [
+      ThisBbx 0 get
+      0 0
+      ThisBbx 1 get neg
+      0
+      ThisBbx 1 get
+    ]
+    { ThisBitmap }
+    imagemask
+  end % pop the working dict
+} def
+end /Tsc-Avts-300 exch definefont pop
+
+/Header << /Timestamp (05 Feb 2019 21:32:34) /Duration (1d 23h) /Product (TSC 5120A) /Input (Input 10.0 MHz 15 dBm) /Reference (Reference 5.0 MHz 7 dBm) /Subtitle () >> def
+
+%%EndProlog
+
+%%BeginSetup
+Util begin Drawing begin Font begin Media begin 
+Windows begin Tables begin Charts begin
+/FONT_Title  FH_Title    MakeTscFont
+/FONT_Medium FH_Medium   MakeTscFont
+/FONT_Small  FH_Small    MakeTscFont
+%%EndSetup
+
+%%Page: Page 1
+%%PageOrientation: Landscape
+
+
+save
+Letter Landscape
+(Allan Deviation \200\215\(\201\)) SetPageTitle
+56 521 550 405 ScaleForPlot
+
+FILL_NoiseFloor newpath 56 153 moveto 74 159 lineto 91 178 lineto 114 198 lineto 132 207 lineto 149 233 lineto 173 256 lineto 190 267 lineto 208 284 lineto 231 305 lineto 248 316 lineto 266 328 lineto 289 337 lineto 307 341 lineto 324 345 lineto 347 343 lineto 365 342 lineto 382 339 lineto 406 334 lineto 423 329 lineto 441 335 lineto 441 345 lineto 56 345 lineto 56 153 lineto  closepath fill
+56 345 385 12 rectfill
+
+
+LINE_MinorGrid 74 357 74 23 DL 84 357 84 23 DL 91 357 91 23 DL 97 357 97 23 DL 101 357 101 23 DL 105 357 105 23 DL 109 357 109 23 DL 112 357 112 23 DL 132 357 132 23 DL 142 357 142 23 DL 149 357 149 23 DL 155 357 155 23 DL 160 357 160 23 DL 163 357 163 23 DL 167 357 167 23 DL 170 357 170 23 DL 190 357 190 23 DL 200 357 200 23 DL 208 357 208 23 DL 213 357 213 23 DL 218 357 218 23 DL 222 357 222 23 DL 225 357 225 23 DL 228 357 228 23 DL 248 357 248 23 DL 259 357 259 23 DL 266 357 266 23 DL 271 357 271 23 DL 276 357 276 23 DL 280 357 280 23 DL 283 357 283 23 DL 286 357 286 23 DL 307 357 307 23 DL 317 357 317 23 DL 324 357 324 23 DL 330 357 330 23 DL 334 357 334 23 DL 338 357 338 23 DL 342 357 342 23 DL 345 357 345 23 DL 365 357 365 23 DL 375 357 375 23 DL 382 357 382 23 DL 388 357 388 23 DL 393 357 393 23 DL 396 357 396 23 DL 400 357 400 23 DL 403 357 403 23 DL 423 357 423 23 DL 433 357 433 23 DL 441 357 441 23 DL 446 357 446 23 DL 451 357 451 23 DL 455 357 455 23 DL 458 357 458 23 DL 461 357 461 23 DL 481 357 481 23 DL 492 357 492 23 DL 499 357 499 23 DL 504 357 504 23 DL 509 357 509 23 DL 513 357 513 23 DL 516 357 516 23 DL 519 357 519 23 DL 521 340 56 340 DL 521 330 56 330 DL 521 323 56 323 DL 521 318 56 318 DL 521 314 56 314 DL 521 310 56 310 DL 521 307 56 307 DL 521 304 56 304 DL 521 284 56 284 DL 521 275 56 275 DL 521 268 56 268 DL 521 262 56 262 DL 521 258 56 258 DL 521 254 56 254 DL 521 251 56 251 DL 521 248 56 248 DL 521 229 56 229 DL 521 219 56 219 DL 521 212 56 212 DL 521 206 56 206 DL 521 202 56 202 DL 521 198 56 198 DL 521 195 56 195 DL 521 192 56 192 DL 521 173 56 173 DL 521 163 56 163 DL 521 156 56 156 DL 521 150 56 150 DL 521 146 56 146 DL 521 142 56 142 DL 521 139 56 139 DL 521 136 56 136 DL 521 117 56 117 DL 521 107 56 107 DL 521 100 56 100 DL 521 95 56 95 DL 521 90 56 90 DL 521 86 56 86 DL 521 83 56 83 DL 521 80 56 80 DL 521 61 56 61 DL 521 51 56 51 DL 521 44 56 44 DL 521 39 56 39 DL 521 34 56 34 DL 521 31 56 31 DL 521 27 56 27 DL 521 25 56 25 DL 
+
+LINE_MajorGrid 56 360 56 23 DL 114 360 114 23 DL 172 360 172 23 DL 231 360 231 23 DL 289 360 289 23 DL 347 360 347 23 DL 406 360 406 23 DL 464 360 464 23 DL 521 360 521 23 DL 521 357 53 357 DL 521 301 53 301 DL 521 245 53 245 DL 521 189 53 189 DL 521 134 53 134 DL 521 78 53 78 DL 521 23 53 23 DL 
+
+FONT_Legends setfont 56 361 (10\202\206) CS 114 361 (10\202\205) CS 172 361 (10\202\204) CS 231 361 (10\203) CS 289 361 (10\204) CS 347 361 (10\205) CS 406 361 (10\206) CS 464 361 (10\207) CS 521 361 (10\210) CS 49 347 (10\202\204\210) RS 49 291 (10\202\204\207) RS 49 235 (10\202\204\206) RS 49 179 (10\202\204\205) RS 49 124 (10\202\204\204) RS 49 68 (10\202\204\203) RS 49 13 (10\202\214) RS 56 382 (Averaging Time \201, seconds) LS 56 1 (\201\217 = 1 ms) LS 522 1 (NEQ BW = 500 Hz) RS 
+
+LINE_Snapshot 
+
+LINE_Testmask 
+
+LINE_Data 56 51 56 51 DL 74 64 56 51 DL 91 82 74 64 DL 114 100 91 82 DL 132 120 114 100 DL 149 134 132 120 DL 173 167 149 134 DL 190 183 173 167 DL 208 198 190 183 DL 231 214 208 198 DL 248 226 231 214 DL 266 233 248 226 DL 289 237 266 233 DL 307 237 289 237 DL 324 233 307 237 DL 347 223 324 233 DL 365 216 347 223 DL 382 209 365 216 DL 406 205 382 209 DL 423 201 406 205 DL 441 192 423 201 DL 464 178 441 192 DL 481 166 464 178 DL 499 153 481 166 DL 
+
+LINE_Spur 
+
+LINE_Data 56 51 DP 74 64 DP 91 82 DP 114 100 DP 132 120 DP 149 134 DP 173 167 DP 190 183 DP 208 198 DP 231 214 DP 248 226 DP 266 233 DP 289 237 DP 307 237 DP 324 233 DP 347 223 DP 365 216 DP 382 209 DP 406 205 DP 423 201 DP 441 192 DP 464 178 DP 481 166 DP 499 153 DP 
+
+LINE_Data 
+
+DrawFooter restore showpage
+%%PageTrailer
+%%EOF

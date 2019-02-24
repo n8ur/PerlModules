@@ -15,7 +15,14 @@ N8UR-StringTools
     # return $input as upper case
     $string = upper_case($input)
 
+	# splits input into alpha prefix, numeric value, and alpha suffix
+    # first split is when a digit, or "+", "-", or "." is encountered
+    # second split is at first alpha after the number
     ($prefix,$value,$suffix) = parse_value($string)
+	
+	# print array to file; if $add_newline append \n after each element
+	print_array_to_file(@array of text lines,$filename,[$add_newline])
+	
 
 
 INSTALLATION

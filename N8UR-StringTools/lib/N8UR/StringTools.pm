@@ -5,7 +5,8 @@ use strict;
 use warnings;
 use Exporter qw( import );
 
-our @EXPORT = qw(trim collapse squash lower_case upper_case round parse_value);
+our @EXPORT = qw(trim collapse squash lower_case upper_case
+				 round parse_value print_array_to_file );
 our @EXPORT_OK   = qw();
 our %EXPORT_TAGS = qw();
 our $VERSION = 1.00;
@@ -41,7 +42,13 @@ Version 1.00
 	# return $input as upper case
     $string = upper_case($input)
 
-    ($prefix,$value,$suffix) = parse_value($string)
+	# splits input into alpha prefix, numeric value, and alpha suffix
+	# first split is when a digit, or "+", "-", or "." is encountered
+	# second split is at first alpha after the number
+	($prefix,$value,$suffix) = parse_value($string)
+
+	# print array to text file; if $add_newline, add \n after each element
+	print_array_to_file(@array_of_text_lines,$filename,[$add_newline]);
 
 =head1 EXPORT
 
@@ -50,7 +57,8 @@ Version 1.00
     squash()
     lower_case()
     upper_case()
-    parse_value($string)
+    parse_value($string)	
+	print_array_to_file(@array_of_text_lines,$filename,[$add_newline])
 
 =head1 AUTHOR
 
@@ -215,6 +223,22 @@ sub parse_value {
 	$suffix = substr($val,$end);
 
 	return $prefix,$value,$suffix;
+}
+
+# print array to file; if $newline, add \n after each element
+sub print_array_to_file {
+	my @a = shift;
+	my $filename = shift;
+	my $add_newline = shift;
+	
+	open my $fh, '>', $filename or die "Cannot open $filename: $!";
+
+	# Loop over the array
+	foreach (@a) {
+		if ($add_newline) { print $fh "$_\n"; }
+		else { print $fh $_; }
+	}
+	close $fh;
 }
 
 __END__
